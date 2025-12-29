@@ -5,11 +5,9 @@
 // Pre-allocated memory - adjust ABC_MAX_NOTES in abc_parser.h for your needs
 // ============================================================================
 
-// Static allocation of note pool and sheet
 static NotePool g_note_pool;
 static struct sheet g_sheet;
 
-// Example ABC notation piece
 static const char *music =
     "T:Greensleeves\n"
     "C:Traditional\n"
@@ -26,69 +24,52 @@ int main(void) {
     printf("ABC Music Parser (Embedded Version)\n");
     printf("====================================\n\n");
 
-    // Initialize the memory pool (do this once at startup)
     note_pool_init(&g_note_pool);
-
-    // Initialize the sheet with the pool
     sheet_init(&g_sheet, &g_note_pool);
 
-    printf("Memory pool capacity: %d notes\n", g_note_pool.capacity);
-    printf("Sheet struct size: %zu bytes\n", sizeof(struct sheet));
-    printf("Note struct size: %zu bytes\n", sizeof(struct note));
-    printf("Total static memory: %zu bytes\n\n",
+    printf("Memory footprint:\n");
+    printf("  Note struct:  %3zu bytes\n", sizeof(struct note));
+    printf("  Sheet struct: %3zu bytes\n", sizeof(struct sheet));
+    printf("  Note pool:    %3zu bytes (%u notes)\n",
+           sizeof(g_note_pool), g_note_pool.capacity);
+    printf("  Total static: %3zu bytes\n\n",
            sizeof(g_note_pool) + sizeof(g_sheet));
 
-    // Parse the music
     int result = abc_parse(&g_sheet, music);
 
     if (result < 0) {
-        printf("Error: Failed to parse ABC notation (error code: %d)\n", result);
-        if (result == -2) {
-            printf("  Note pool exhausted! Increase ABC_MAX_NOTES.\n");
-        }
+        printf("Error: parse failed (%d)\n", result);
+        if (result == -2) printf("  Pool exhausted!\n");
         return 1;
     }
 
-    // Print the parsed sheet
     sheet_print(&g_sheet);
 
-    // Example: iterate through notes
-    printf("\nFirst 10 notes (iteration example):\n");
-    struct note *note = sheet_first_note(&g_sheet);
-    int count = 0;
-    while (note && count < 10) {
-        if (note->note_name != NOTE_REST) {
-            printf("  Note %d: %s%s%d @ %.2f Hz for %.1f ms\n",
-                   count + 1,
-                   note_name_to_string(note->note_name),
-                   accidental_to_string(note->accidental),
-                   note->octave,
-                   note->frequency,
-                   note->duration_ms);
+    printf("\nFirst 10 notes:\n");
+    struct note *n = sheet_first_note(&g_sheet);
+    for (int i = 0; n && i < 10; i++) {
+        if (n->note_name != NOTE_REST) {
+            printf("  %d: %s%s%u @ %.1f Hz, %u ms\n",
+                   i + 1,
+                   note_name_to_string((NoteName)n->note_name),
+                   accidental_to_string(n->accidental),
+                   n->octave,
+                   n->frequency_x10 / 10.0f,
+                   n->duration_ms);
         } else {
-            printf("  Note %d: REST for %.1f ms\n",
-                   count + 1, note->duration_ms);
+            printf("  %d: REST %u ms\n", i + 1, n->duration_ms);
         }
-        note = note_next(&g_sheet, note);
-        count++;
+        n = note_next(&g_sheet, n);
     }
 
-    // Demonstrate reuse - reset and parse again
-    printf("\n--- Demonstrating memory reuse ---\n");
+    printf("\n--- Memory reuse test ---\n");
     sheet_reset(&g_sheet);
-    printf("After reset - pool usage: %d/%d\n",
-           g_note_pool.count, g_note_pool.capacity);
+    printf("After reset: %u/%u notes\n", g_note_pool.count, g_note_pool.capacity);
 
-    // Parse a simpler tune
-    const char *simple_tune =
-        "L:1/4\n"
-        "K:C\n"
-        "C D E F | G A B c |";
-
-    result = abc_parse(&g_sheet, simple_tune);
-    if (result == 0) {
-        printf("Parsed simple tune: %d notes\n", g_sheet.note_count);
-        printf("Pool usage: %d/%d\n", g_note_pool.count, g_note_pool.capacity);
+    const char *simple = "L:1/4\nK:C\nC D E F | G A B c |";
+    if (abc_parse(&g_sheet, simple) == 0) {
+        printf("Parsed: %u notes, pool: %u/%u\n",
+               g_sheet.note_count, g_note_pool.count, g_note_pool.capacity);
     }
 
     printf("\nDone!\n");
