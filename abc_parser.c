@@ -1,8 +1,10 @@
 #include "abc_parser.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
+
+// ============================================================================
+// Frequency lookup table
+// ============================================================================
 
 // Frequency lookup table [semitone][octave]
 // Octaves 0-6, where octave 4 contains A440
@@ -32,8 +34,10 @@ static const int note_to_semitone[7] = {
     11  // B
 };
 
-// Key signature accidentals (sharps/flats for each note in the key)
-// Index corresponds to NoteName enum
+// ============================================================================
+// Key signature data
+// ============================================================================
+
 typedef struct {
     const char *name;
     Accidental accidentals[7]; // Accidentals for C, D, E, F, G, A, B
@@ -77,7 +81,10 @@ static const KeySignature key_signatures[] = {
     {NULL, {0}}
 };
 
-// Parser state
+// ============================================================================
+// Parser state (stack allocated during parsing)
+// ============================================================================
+
 typedef struct {
     const char *input;
     size_t pos;
@@ -100,18 +107,17 @@ typedef struct {
     int meter_num;
     int meter_den;
 
+    // Repeat section tracking (indices into note pool)
+    int repeat_start_index;
+    int repeat_end_index;
+    int in_repeat;
+
 } ParserState;
 
-// Forward declarations
-static void parse_header(ParserState *state, struct sheet *sheet);
-static void parse_notes(ParserState *state, struct sheet *sheet);
-static struct note *parse_single_note(ParserState *state);
-static char peek(ParserState *state);
-static char advance(ParserState *state);
-static void skip_whitespace(ParserState *state);
-static float calculate_duration_ms(ParserState *state, int num, int den);
+// ============================================================================
+// Utility functions
+// ============================================================================
 
-// Utility function implementations
 float note_to_frequency(NoteName name, int octave, Accidental acc) {
     if (name == NOTE_REST) {
         return 0.0f;
@@ -177,11 +183,114 @@ const char *accidental_to_string(Accidental acc) {
     }
 }
 
-struct note *note_create(NoteName name, int octave, Accidental acc, float duration_ms) {
-    struct note *n = malloc(sizeof(struct note));
-    if (!n) return NULL;
+// ============================================================================
+// Memory pool functions
+// ============================================================================
 
-    n->next = NULL;
+void note_pool_init(NotePool *pool) {
+    if (!pool) return;
+    pool->count = 0;
+    pool->capacity = ABC_MAX_NOTES;
+}
+
+void note_pool_reset(NotePool *pool) {
+    if (!pool) return;
+    pool->count = 0;
+}
+
+int note_pool_available(const NotePool *pool) {
+    if (!pool) return 0;
+    return pool->capacity - pool->count;
+}
+
+// Allocate a note from the pool, returns index or -1 if full
+static int note_pool_alloc(NotePool *pool) {
+    if (!pool || pool->count >= pool->capacity) {
+        return -1;
+    }
+    int index = pool->count;
+    pool->count++;
+
+    // Initialize the note
+    struct note *n = &pool->notes[index];
+    n->next_index = -1;
+    n->frequency = 0.0f;
+    n->duration_ms = 0.0f;
+    n->note_name = NOTE_C;
+    n->octave = 4;
+    n->accidental = ACC_NONE;
+    n->midi_note = 0;
+    n->velocity = 1.0f;
+
+    return index;
+}
+
+// ============================================================================
+// Sheet functions
+// ============================================================================
+
+void sheet_init(struct sheet *sheet, NotePool *pool) {
+    if (!sheet) return;
+
+    sheet->note_pool = pool;
+    sheet->head_index = -1;
+    sheet->tail_index = -1;
+    sheet->note_count = 0;
+
+    sheet->title[0] = '\0';
+    sheet->composer[0] = '\0';
+    sheet->key[0] = '\0';
+
+    sheet->tempo_bpm = 120;
+    sheet->default_note_num = 1;
+    sheet->default_note_den = 8;
+    sheet->meter_num = 4;
+    sheet->meter_den = 4;
+    sheet->total_duration_ms = 0.0f;
+}
+
+void sheet_reset(struct sheet *sheet) {
+    if (!sheet) return;
+
+    if (sheet->note_pool) {
+        note_pool_reset(sheet->note_pool);
+    }
+
+    sheet->head_index = -1;
+    sheet->tail_index = -1;
+    sheet->note_count = 0;
+    sheet->total_duration_ms = 0.0f;
+
+    sheet->title[0] = '\0';
+    sheet->composer[0] = '\0';
+    sheet->key[0] = '\0';
+}
+
+struct note *note_get(const struct sheet *sheet, int index) {
+    if (!sheet || !sheet->note_pool) return NULL;
+    if (index < 0 || index >= sheet->note_pool->count) return NULL;
+    return &sheet->note_pool->notes[index];
+}
+
+struct note *sheet_first_note(const struct sheet *sheet) {
+    if (!sheet) return NULL;
+    return note_get(sheet, sheet->head_index);
+}
+
+struct note *note_next(const struct sheet *sheet, const struct note *current) {
+    if (!sheet || !current) return NULL;
+    return note_get(sheet, current->next_index);
+}
+
+// Append a note to the sheet, returns 0 on success, -1 on pool exhausted
+static int sheet_append_note(struct sheet *sheet, NoteName name, int octave,
+                              Accidental acc, float duration_ms) {
+    if (!sheet || !sheet->note_pool) return -1;
+
+    int index = note_pool_alloc(sheet->note_pool);
+    if (index < 0) return -1;
+
+    struct note *n = &sheet->note_pool->notes[index];
     n->note_name = name;
     n->octave = octave;
     n->accidental = acc;
@@ -189,37 +298,26 @@ struct note *note_create(NoteName name, int octave, Accidental acc, float durati
     n->frequency = note_to_frequency(name, octave, acc);
     n->midi_note = note_to_midi(name, octave, acc);
     n->velocity = 1.0f;
+    n->next_index = -1;
 
-    return n;
-}
-
-struct note *note_copy(const struct note *note) {
-    if (!note) return NULL;
-
-    struct note *copy = malloc(sizeof(struct note));
-    if (!copy) return NULL;
-
-    *copy = *note;
-    copy->next = NULL;
-
-    return copy;
-}
-
-void note_append(struct sheet *sheet, struct note *note) {
-    if (!sheet || !note) return;
-
-    if (!sheet->head) {
-        sheet->head = note;
-        sheet->tail = note;
+    if (sheet->head_index < 0) {
+        sheet->head_index = index;
+        sheet->tail_index = index;
     } else {
-        sheet->tail->next = note;
-        sheet->tail = note;
+        sheet->note_pool->notes[sheet->tail_index].next_index = index;
+        sheet->tail_index = index;
     }
+
     sheet->note_count++;
-    sheet->total_duration_ms += note->duration_ms;
+    sheet->total_duration_ms += duration_ms;
+
+    return 0;
 }
 
+// ============================================================================
 // Parser helper functions
+// ============================================================================
+
 static char peek(ParserState *state) {
     if (state->pos >= state->len) return '\0';
     return state->input[state->pos];
@@ -242,18 +340,12 @@ static void skip_whitespace(ParserState *state) {
 }
 
 static float calculate_duration_ms(ParserState *state, int num, int den) {
-    // Calculate duration based on default note length and tempo
-    // Default: 1/8 note at 120 BPM
-    // At 120 BPM, a quarter note = 500ms, so eighth note = 250ms
-
-    float quarter_note_ms = 60000.0f / state->tempo_bpm;
-    float default_note_ms = quarter_note_ms * 4.0f * state->default_num / state->default_den;
-
-    return default_note_ms * num / den;
+    float quarter_note_ms = 60000.0f / (float)state->tempo_bpm;
+    float default_note_ms = quarter_note_ms * 4.0f * (float)state->default_num / (float)state->default_den;
+    return default_note_ms * (float)num / (float)den;
 }
 
 static void set_key_signature(ParserState *state, const char *key) {
-    // Find matching key signature
     for (int i = 0; key_signatures[i].name != NULL; i++) {
         if (strcmp(key_signatures[i].name, key) == 0) {
             memcpy(state->key_accidentals, key_signatures[i].accidentals,
@@ -261,9 +353,26 @@ static void set_key_signature(ParserState *state, const char *key) {
             return;
         }
     }
-    // Default to C major if not found
     memset(state->key_accidentals, ACC_NONE, sizeof(state->key_accidentals));
 }
+
+static int is_alpha(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+// Safe string copy with length limit
+static void safe_strcpy(char *dest, size_t dest_size, const char *src, size_t src_len) {
+    size_t copy_len = src_len;
+    if (copy_len >= dest_size) {
+        copy_len = dest_size - 1;
+    }
+    memcpy(dest, src, copy_len);
+    dest[copy_len] = '\0';
+}
+
+// ============================================================================
+// Header parsing
+// ============================================================================
 
 static void parse_header(ParserState *state, struct sheet *sheet) {
     while (state->pos < state->len) {
@@ -305,7 +414,7 @@ static void parse_header(ParserState *state, struct sheet *sheet) {
                     }
                     // Check for next header field
                     if (end > start && end + 1 < state->len &&
-                        state->input[end + 1] == ':' && isalpha(c)) {
+                        state->input[end + 1] == ':' && is_alpha(c)) {
                         break;
                     }
                     end++;
@@ -324,57 +433,88 @@ static void parse_header(ParserState *state, struct sheet *sheet) {
                 val_end--;
             }
 
-            char *value = malloc(val_end - start + 1);
-            if (value) {
-                memcpy(value, state->input + start, val_end - start);
-                value[val_end - start] = '\0';
+            size_t value_len = val_end - start;
+            const char *value = state->input + start;
 
-                switch (field) {
-                    case 'T': // Title
-                        free(sheet->title);
-                        sheet->title = value;
-                        value = NULL;
-                        break;
+            switch (field) {
+                case 'T': // Title
+                    safe_strcpy(sheet->title, ABC_MAX_TITLE_LEN, value, value_len);
+                    break;
 
-                    case 'C': // Composer
-                        free(sheet->composer);
-                        sheet->composer = value;
-                        value = NULL;
-                        break;
+                case 'C': // Composer
+                    safe_strcpy(sheet->composer, ABC_MAX_COMPOSER_LEN, value, value_len);
+                    break;
 
-                    case 'L': // Default note length
-                        if (sscanf(value, "%d/%d", &state->default_num, &state->default_den) == 2) {
-                            sheet->default_note_num = state->default_num;
-                            sheet->default_note_den = state->default_den;
+                case 'L': { // Default note length
+                    // Simple parsing without sscanf
+                    int num = 0, den = 0;
+                    size_t i = 0;
+                    while (i < value_len && value[i] >= '0' && value[i] <= '9') {
+                        num = num * 10 + (value[i] - '0');
+                        i++;
+                    }
+                    if (i < value_len && value[i] == '/') {
+                        i++;
+                        while (i < value_len && value[i] >= '0' && value[i] <= '9') {
+                            den = den * 10 + (value[i] - '0');
+                            i++;
                         }
-                        break;
-
-                    case 'M': // Meter
-                        if (sscanf(value, "%d/%d", &state->meter_num, &state->meter_den) == 2) {
-                            sheet->meter_num = state->meter_num;
-                            sheet->meter_den = state->meter_den;
-                        }
-                        break;
-
-                    case 'Q': // Tempo
-                        state->tempo_bpm = atoi(value);
-                        if (state->tempo_bpm <= 0) state->tempo_bpm = 120;
-                        sheet->tempo_bpm = state->tempo_bpm;
-                        break;
-
-                    case 'K': // Key
-                        free(sheet->key);
-                        sheet->key = value;
-                        value = NULL;
-                        set_key_signature(state, sheet->key);
-                        state->pos = end;
-                        free(value);
-                        return; // K: ends the header
-
-                    default:
-                        break;
+                    }
+                    if (num > 0 && den > 0) {
+                        state->default_num = num;
+                        state->default_den = den;
+                        sheet->default_note_num = num;
+                        sheet->default_note_den = den;
+                    }
+                    break;
                 }
-                free(value);
+
+                case 'M': { // Meter
+                    int num = 0, den = 0;
+                    size_t i = 0;
+                    while (i < value_len && value[i] >= '0' && value[i] <= '9') {
+                        num = num * 10 + (value[i] - '0');
+                        i++;
+                    }
+                    if (i < value_len && value[i] == '/') {
+                        i++;
+                        while (i < value_len && value[i] >= '0' && value[i] <= '9') {
+                            den = den * 10 + (value[i] - '0');
+                            i++;
+                        }
+                    }
+                    if (num > 0 && den > 0) {
+                        state->meter_num = num;
+                        state->meter_den = den;
+                        sheet->meter_num = num;
+                        sheet->meter_den = den;
+                    }
+                    break;
+                }
+
+                case 'Q': { // Tempo
+                    int tempo = 0;
+                    for (size_t i = 0; i < value_len; i++) {
+                        if (value[i] >= '0' && value[i] <= '9') {
+                            tempo = tempo * 10 + (value[i] - '0');
+                        }
+                    }
+                    if (tempo > 0) {
+                        state->tempo_bpm = tempo;
+                        sheet->tempo_bpm = tempo;
+                    }
+                    break;
+                }
+
+                case 'K': { // Key
+                    safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, value, value_len);
+                    set_key_signature(state, sheet->key);
+                    state->pos = end;
+                    return; // K: ends the header
+                }
+
+                default:
+                    break;
             }
 
             state->pos = end;
@@ -385,10 +525,15 @@ static void parse_header(ParserState *state, struct sheet *sheet) {
     }
 }
 
-static struct note *parse_single_note(ParserState *state) {
+// ============================================================================
+// Note parsing
+// ============================================================================
+
+// Parse a single note, append to sheet. Returns 0 on success, -1 on pool full, 1 if no note parsed
+static int parse_single_note(ParserState *state, struct sheet *sheet) {
     skip_whitespace(state);
 
-    if (state->pos >= state->len) return NULL;
+    if (state->pos >= state->len) return 1;
 
     char c = peek(state);
 
@@ -413,7 +558,7 @@ static struct note *parse_single_note(ParserState *state) {
 
     // Parse note name
     NoteName name;
-    int octave = 4; // Default octave (middle C octave)
+    int octave = 4;
 
     if (c >= 'C' && c <= 'G') {
         name = (NoteName)(c - 'C');
@@ -421,7 +566,7 @@ static struct note *parse_single_note(ParserState *state) {
         advance(state);
     } else if (c == 'A' || c == 'B') {
         name = (c == 'A') ? NOTE_A : NOTE_B;
-        octave = 3; // A and B below middle C
+        octave = 3;
         advance(state);
     } else if (c >= 'c' && c <= 'g') {
         name = (NoteName)(c - 'c');
@@ -435,19 +580,17 @@ static struct note *parse_single_note(ParserState *state) {
         name = NOTE_REST;
         advance(state);
     } else {
-        return NULL;
+        return 1; // No note found
     }
 
     // Apply key signature if no explicit accidental
     if (!explicit_accidental && name != NOTE_REST) {
-        // Check bar accidentals first
         if (state->bar_accidentals[name] != ACC_NONE) {
             acc = state->bar_accidentals[name];
         } else {
             acc = state->key_accidentals[name];
         }
     } else if (explicit_accidental && name != NOTE_REST) {
-        // Store explicit accidental for this bar
         state->bar_accidentals[name] = (acc == ACC_NATURAL) ? ACC_NONE : acc;
         if (acc == ACC_NATURAL) acc = ACC_NONE;
     }
@@ -492,9 +635,7 @@ static struct note *parse_single_note(ParserState *state) {
                 c = peek(state);
             }
         } else {
-            // Bare / means /2
             den = 2;
-            // Multiple slashes: // = /4, /// = /8, etc.
             while (peek(state) == '/') {
                 advance(state);
                 den *= 2;
@@ -503,37 +644,34 @@ static struct note *parse_single_note(ParserState *state) {
     }
 
     float duration = calculate_duration_ms(state, num, den);
-    return note_create(name, octave, acc, duration);
+    return sheet_append_note(sheet, name, octave, acc, duration);
 }
 
-static void copy_notes_to_sheet(struct sheet *sheet, struct note *source) {
-    struct note *current = source;
-    while (current) {
-        struct note *copy = note_copy(current);
-        if (copy) {
-            note_append(sheet, copy);
-        }
-        current = current->next;
+// Copy notes from repeat section
+static int copy_repeat_section(struct sheet *sheet, int start_index, int end_index) {
+    if (!sheet || !sheet->note_pool) return -1;
+    if (start_index < 0) return 0;
+
+    int current = start_index;
+    while (current >= 0 && current <= end_index && current < sheet->note_pool->count) {
+        struct note *src = &sheet->note_pool->notes[current];
+
+        int result = sheet_append_note(sheet, src->note_name, src->octave,
+                                        src->accidental, src->duration_ms);
+        if (result < 0) return -1;
+
+        current = src->next_index;
+        if (current < 0) break;
     }
+
+    return 0;
 }
 
-static void free_note_list(struct note *head) {
-    while (head) {
-        struct note *next = head->next;
-        free(head);
-        head = next;
-    }
-}
-
-static void parse_notes(ParserState *state, struct sheet *sheet) {
-    // Repetition handling
-    struct note *repeat_start = NULL;
-    struct note *repeat_end = NULL;
-    int in_repeat = 0;
-
-    // Temporary storage for repeat section
-    struct note *repeat_section_head = NULL;
-    struct note *repeat_section_tail = NULL;
+static int parse_notes(ParserState *state, struct sheet *sheet) {
+    // Track repeat section by indices
+    state->repeat_start_index = -1;
+    state->repeat_end_index = -1;
+    state->in_repeat = 0;
 
     while (state->pos < state->len) {
         skip_whitespace(state);
@@ -546,22 +684,17 @@ static void parse_notes(ParserState *state, struct sheet *sheet) {
             advance(state);
             c = peek(state);
 
-            // Reset bar accidentals at bar lines
+            // Reset bar accidentals
             memset(state->bar_accidentals, ACC_NONE, sizeof(state->bar_accidentals));
 
             if (c == ':') {
                 // |: Start repeat
                 advance(state);
-                in_repeat = 1;
-                // Clear previous repeat section
-                free_note_list(repeat_section_head);
-                repeat_section_head = NULL;
-                repeat_section_tail = NULL;
+                state->in_repeat = 1;
+                state->repeat_start_index = sheet->note_pool ? sheet->note_pool->count : 0;
             } else if (c == '|') {
-                // || Double bar
                 advance(state);
             } else if (c == ']') {
-                // |] End bar
                 advance(state);
             }
             continue;
@@ -571,33 +704,39 @@ static void parse_notes(ParserState *state, struct sheet *sheet) {
             advance(state);
             c = peek(state);
             if (c == '|') {
-                // :| End repeat - copy the section again
+                // :| End repeat
                 advance(state);
 
-                // Check for :|: (repeat both directions)
+                // Record end of repeat section (before copying)
+                state->repeat_end_index = sheet->note_pool ? sheet->note_pool->count - 1 : -1;
+
+                // Check for :|:
                 if (peek(state) == ':') {
                     advance(state);
-                    // Copy repeat section and start new repeat
-                    copy_notes_to_sheet(sheet, repeat_section_head);
+                    // Copy and start new repeat
+                    if (copy_repeat_section(sheet, state->repeat_start_index, state->repeat_end_index) < 0) {
+                        return -2;
+                    }
+                    state->repeat_start_index = sheet->note_pool ? sheet->note_pool->count : 0;
                 } else {
-                    // Just end repeat - copy section
-                    copy_notes_to_sheet(sheet, repeat_section_head);
-                    in_repeat = 0;
-                    free_note_list(repeat_section_head);
-                    repeat_section_head = NULL;
-                    repeat_section_tail = NULL;
+                    // Copy repeat section
+                    if (copy_repeat_section(sheet, state->repeat_start_index, state->repeat_end_index) < 0) {
+                        return -2;
+                    }
+                    state->in_repeat = 0;
+                    state->repeat_start_index = -1;
+                    state->repeat_end_index = -1;
                 }
             }
             continue;
         }
 
-        // Skip other non-note characters
+        // Skip non-note characters
         if (c == '[' || c == ']' || c == '(' || c == ')' ||
             c == '{' || c == '}' || c == '"' || c == '!' ||
             c == '+' || c == '-' || c == '<' || c == '>' ||
             c == '~' || c == '%') {
 
-            // Skip quoted strings
             if (c == '"') {
                 advance(state);
                 while (state->pos < state->len && peek(state) != '"') {
@@ -611,85 +750,54 @@ static void parse_notes(ParserState *state, struct sheet *sheet) {
         }
 
         // Try to parse a note
-        struct note *note = parse_single_note(state);
-        if (note) {
-            // Add to main sheet
-            note_append(sheet, note);
-
-            // If in repeat section, also store a copy
-            if (in_repeat) {
-                struct note *copy = note_copy(note);
-                if (copy) {
-                    if (!repeat_section_head) {
-                        repeat_section_head = copy;
-                        repeat_section_tail = copy;
-                    } else {
-                        repeat_section_tail->next = copy;
-                        repeat_section_tail = copy;
-                    }
-                }
-            }
-        } else {
-            // Unknown character, skip
+        int result = parse_single_note(state, sheet);
+        if (result < 0) {
+            return -2; // Pool exhausted
+        } else if (result > 0) {
+            // Not a note, skip character
             advance(state);
         }
     }
 
-    // Clean up
-    free_note_list(repeat_section_head);
+    return 0;
 }
 
-struct sheet *abc_parse(const char *abc_string) {
-    if (!abc_string) return NULL;
+// ============================================================================
+// Main parse function
+// ============================================================================
 
-    struct sheet *sheet = calloc(1, sizeof(struct sheet));
-    if (!sheet) return NULL;
-
-    // Initialize defaults
-    sheet->tempo_bpm = 120;
-    sheet->default_note_num = 1;
-    sheet->default_note_den = 8;
-    sheet->meter_num = 4;
-    sheet->meter_den = 4;
+int abc_parse(struct sheet *sheet, const char *abc_string) {
+    if (!sheet || !abc_string) return -1;
+    if (!sheet->note_pool) return -1;
 
     ParserState state = {
         .input = abc_string,
         .pos = 0,
         .len = strlen(abc_string),
-        .default_num = 1,
-        .default_den = 8,
-        .tempo_bpm = 120,
-        .meter_num = 4,
-        .meter_den = 4
+        .default_num = sheet->default_note_num,
+        .default_den = sheet->default_note_den,
+        .tempo_bpm = sheet->tempo_bpm,
+        .meter_num = sheet->meter_num,
+        .meter_den = sheet->meter_den,
+        .repeat_start_index = -1,
+        .repeat_end_index = -1,
+        .in_repeat = 0
     };
 
     memset(state.key_accidentals, ACC_NONE, sizeof(state.key_accidentals));
     memset(state.bar_accidentals, ACC_NONE, sizeof(state.bar_accidentals));
 
-    // Parse header fields
     parse_header(&state, sheet);
 
-    // Parse notes
-    parse_notes(&state, sheet);
+    int result = parse_notes(&state, sheet);
+    if (result < 0) return result;
 
-    return sheet;
+    return 0;
 }
 
-void sheet_free(struct sheet *sheet) {
-    if (!sheet) return;
-
-    struct note *current = sheet->head;
-    while (current) {
-        struct note *next = current->next;
-        free(current);
-        current = next;
-    }
-
-    free(sheet->title);
-    free(sheet->composer);
-    free(sheet->key);
-    free(sheet);
-}
+// ============================================================================
+// Debug printing
+// ============================================================================
 
 void sheet_print(const struct sheet *sheet) {
     if (!sheet) {
@@ -699,9 +807,9 @@ void sheet_print(const struct sheet *sheet) {
 
     printf("=== Sheet Music ===\n");
 
-    if (sheet->title) printf("Title: %s\n", sheet->title);
-    if (sheet->composer) printf("Composer: %s\n", sheet->composer);
-    if (sheet->key) printf("Key: %s\n", sheet->key);
+    if (sheet->title[0]) printf("Title: %s\n", sheet->title);
+    if (sheet->composer[0]) printf("Composer: %s\n", sheet->composer);
+    if (sheet->key[0]) printf("Key: %s\n", sheet->key);
 
     printf("Tempo: %d BPM\n", sheet->tempo_bpm);
     printf("Meter: %d/%d\n", sheet->meter_num, sheet->meter_den);
@@ -710,13 +818,17 @@ void sheet_print(const struct sheet *sheet) {
     printf("Total duration: %.2f ms (%.2f seconds)\n",
            sheet->total_duration_ms, sheet->total_duration_ms / 1000.0f);
 
+    if (sheet->note_pool) {
+        printf("Pool usage: %d/%d notes\n", sheet->note_pool->count, sheet->note_pool->capacity);
+    }
+
     printf("\n--- Notes ---\n");
     printf("%-4s %-6s %-4s %-10s %-10s %-6s\n",
            "#", "Note", "Oct", "Freq (Hz)", "Dur (ms)", "MIDI");
     printf("------------------------------------------------\n");
 
     int i = 1;
-    struct note *current = sheet->head;
+    struct note *current = sheet_first_note(sheet);
     while (current) {
         if (current->note_name == NOTE_REST) {
             printf("%-4d %-6s %-4s %-10s %-10.1f %-6s\n",
@@ -732,7 +844,7 @@ void sheet_print(const struct sheet *sheet) {
                    current->frequency, current->duration_ms, current->midi_note);
         }
 
-        current = current->next;
+        current = note_next(sheet, current);
         i++;
     }
 
