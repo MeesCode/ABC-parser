@@ -86,6 +86,9 @@ typedef struct {
     int16_t repeat_start_index;
     int16_t repeat_end_index;
     uint8_t in_repeat;
+    uint8_t tuplet_remaining;    // Notes remaining in current tuplet
+    uint8_t tuplet_num;          // Tuplet: play this many notes...
+    uint8_t tuplet_in_time;      // ...in the time of this many
 } ParserState;
 
 // ============================================================================
@@ -288,7 +291,15 @@ static uint16_t calculate_duration_ms(ParserState *s, int num, int den) {
     uint32_t whole_note_ms = tempo_note_ms * s->tempo_note_den / s->tempo_note_num;
     // Calculate default note duration
     uint32_t default_ms = whole_note_ms * s->default_num / s->default_den;
-    return (uint16_t)(default_ms * num / den);
+    uint32_t duration = default_ms * num / den;
+
+    // Apply tuplet scaling if active
+    if (s->tuplet_remaining > 0) {
+        duration = duration * s->tuplet_in_time / s->tuplet_num;
+        s->tuplet_remaining--;
+    }
+
+    return (uint16_t)duration;
 }
 
 static void set_key_signature(ParserState *s, const char *key) {
@@ -532,7 +543,28 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             continue;
         }
 
-        if (c == '[' || c == ']' || c == '(' || c == ')' ||
+        // Handle tuplet markers: (2, (3, (4, (5, (6, (7
+        if (c == '(') {
+            advance(s);
+            c = peek(s);
+            if (c >= '2' && c <= '9') {
+                uint8_t n = (uint8_t)(c - '0');
+                advance(s);
+                s->tuplet_num = n;
+                s->tuplet_remaining = n;
+                // Default "in time of" values per ABC standard:
+                // (2 = 2 in time of 3, (3 = 3 in time of 2,
+                // (4 = 4 in time of 3, (5-7 = n in time of n-1 for compound, or 2 for simple
+                if (n == 2) s->tuplet_in_time = 3;
+                else if (n == 3) s->tuplet_in_time = 2;
+                else if (n == 4) s->tuplet_in_time = 3;
+                else if (n == 6) s->tuplet_in_time = 2;  // Two beats in compound time
+                else s->tuplet_in_time = n - 1;  // General case
+            }
+            continue;
+        }
+
+        if (c == '[' || c == ']' || c == ')' ||
             c == '{' || c == '}' || c == '!' || c == '+' ||
             c == '-' || c == '<' || c == '>' || c == '~' || c == '%') {
             advance(s);
@@ -576,7 +608,10 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
         .meter_den = sheet->meter_den,
         .repeat_start_index = -1,
         .repeat_end_index = -1,
-        .in_repeat = 0
+        .in_repeat = 0,
+        .tuplet_remaining = 0,
+        .tuplet_num = 0,
+        .tuplet_in_time = 0
     };
     memset(s.key_accidentals, 0, 7);
     memset(s.bar_accidentals, 0, 7);

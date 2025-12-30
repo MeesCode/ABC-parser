@@ -276,6 +276,65 @@ TEST(duration_dotted) {
 }
 
 // ============================================================================
+// Tuplet Tests
+// ============================================================================
+
+TEST(triplet) {
+    // (3CDE = triplet: 3 notes in time of 2
+    // At L:1/8, Q:120, normal eighth = 250ms, triplet = 250*2/3 = 166ms
+    int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(3CDE");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.note_count, 3);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration_ms, 166);  // 250 * 2/3
+    n = note_next(&g_sheet, n);
+    ASSERT_EQ(n->duration_ms, 166);
+    n = note_next(&g_sheet, n);
+    ASSERT_EQ(n->duration_ms, 166);
+    return 1;
+}
+
+TEST(duplet) {
+    // (2CD = duplet: 2 notes in time of 3
+    // At L:1/8, Q:120, normal eighth = 250ms, duplet = 250*3/2 = 375ms
+    int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(2CD");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.note_count, 2);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration_ms, 375);  // 250 * 3/2
+    n = note_next(&g_sheet, n);
+    ASSERT_EQ(n->duration_ms, 375);
+    return 1;
+}
+
+TEST(quadruplet) {
+    // (4CDEF = quadruplet: 4 notes in time of 3
+    // At L:1/8, Q:120, normal eighth = 250ms, quadruplet = 250*3/4 = 187ms
+    int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(4CDEF");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.note_count, 4);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration_ms, 187);  // 250 * 3/4
+    return 1;
+}
+
+TEST(tuplet_followed_by_normal) {
+    // After tuplet ends, normal notes should have normal duration
+    int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(3CDE F");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.note_count, 4);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration_ms, 166);  // triplet
+    n = note_next(&g_sheet, n);
+    ASSERT_EQ(n->duration_ms, 166);  // triplet
+    n = note_next(&g_sheet, n);
+    ASSERT_EQ(n->duration_ms, 166);  // triplet
+    n = note_next(&g_sheet, n);
+    ASSERT_EQ(n->duration_ms, 250);  // normal
+    return 1;
+}
+
+// ============================================================================
 // Rest Tests
 // ============================================================================
 
@@ -682,6 +741,12 @@ int main(void) {
     RUN_TEST(duration_slash_only);
     RUN_TEST(duration_double_slash);
     RUN_TEST(duration_dotted);
+
+    printf("\nTuplets:\n");
+    RUN_TEST(triplet);
+    RUN_TEST(duplet);
+    RUN_TEST(quadruplet);
+    RUN_TEST(tuplet_followed_by_normal);
 
     printf("\nRests:\n");
     RUN_TEST(rest_lowercase);
