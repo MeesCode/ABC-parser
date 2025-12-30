@@ -400,8 +400,8 @@ static int parse_single_note(ParserState *s, struct sheet *sheet) {
     else if (c == 'A') { name = NOTE_A; octave = 3; advance(s); }
     else if (c == 'B') { name = NOTE_B; octave = 3; advance(s); }
     else if (c >= 'c' && c <= 'g') { name = (NoteName)(c - 'c'); octave = 5; advance(s); }
-    else if (c == 'a') { name = NOTE_A; octave = 4; advance(s); }
-    else if (c == 'b') { name = NOTE_B; octave = 4; advance(s); }
+    else if (c == 'a') { name = NOTE_A; octave = 5; advance(s); }
+    else if (c == 'b') { name = NOTE_B; octave = 5; advance(s); }
     else if (c == 'z' || c == 'Z') { name = NOTE_REST; advance(s); }
     else return 1;
 

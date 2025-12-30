@@ -467,7 +467,7 @@ TEST(notes_after_repeat) {
 // ============================================================================
 
 TEST(frequency_a440) {
-    int result = abc_parse(&g_sheet, "K:C\na");  // a = A4 = 440 Hz
+    int result = abc_parse(&g_sheet, "K:C\nA'");  // A' = A3+1 = A4 = 440 Hz
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_FLOAT_EQ(n->frequency_x10 / 10.0f, 440.0f, 1.0f);
@@ -495,7 +495,7 @@ TEST(midi_middle_c) {
 }
 
 TEST(midi_a440) {
-    int result = abc_parse(&g_sheet, "K:C\na");  // A4 = MIDI 69
+    int result = abc_parse(&g_sheet, "K:C\nA'");  // A' = A4 = MIDI 69
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_EQ(n->midi_note, 69);

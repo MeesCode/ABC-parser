@@ -9,16 +9,15 @@ static NotePool g_note_pool;
 static struct sheet g_sheet;
 
 static const char *music =
-    "T:Greensleeves\n"
-    "C:Traditional\n"
-    "M:6/8\n"
+    "T:Super Mario Bros Theme\n"
+    "X:1\n"
+    "M:4/4\n"
     "L:1/8\n"
-    "Q:120\n"
-    "K:Amin\n"
-    "AG |:E2 A2 A2 B2 :|c4 c2 dc |B3 A G2 ^F2 |G6 AG |"
-    "E2 A2 A2 B2 |c4 c2 d2 |e3 d c2 d2 |e6 g3/2f/ |"
-    "e3 d c2 d2 |e3 f g2 fe |d3 c B2 c2 |d6 cd |"
-    "e2 c2 d2 cB |c2 BA B2 AG |E2 A2 A2 G2 |A6 |";
+    "K:G\n"
+    "Q:1/4=105\n"
+    "e/2eec/2e g/2z3z/2|c/2zG/2 zE/2zAB^A/2=A| Geg a=f/2gec/2 d/2B/2z|c/2zG/2 zE/2zAB^A/2=A|\n"
+    "Geg a=f/2gec/2 d/2B/2z|zg/2^f/2 =f/2^de^G/2A/2cA/2c/2=d/2|zg/2^f/2 =f/2^dec'c'/2 c'/2z3/2|zg/2^f/2 =f/2^de^G/2A/2cA/2c/2=d/2|\n"
+    "z^d/2z=d/2z c/2z3z/2|\n";
 
 int main(void) {
     printf("ABC Music Parser (Embedded Version)\n");
@@ -45,9 +44,9 @@ int main(void) {
 
     sheet_print(&g_sheet);
 
-    printf("\nFirst 10 notes:\n");
+    printf("\nFirst 100 notes:\n");
     struct note *n = sheet_first_note(&g_sheet);
-    for (int i = 0; n && i < 10; i++) {
+    for (int i = 0; n && i < 100; i++) {
         if (n->note_name != NOTE_REST) {
             printf("  %d: %s%s%u @ %.1f Hz, %u ms\n",
                    i + 1,
