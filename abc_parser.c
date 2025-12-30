@@ -396,12 +396,9 @@ static int parse_single_note(ParserState *s, struct sheet *sheet) {
     NoteName name;
     int octave = 4;
 
-    if (c >= 'C' && c <= 'G') { name = (NoteName)(c - 'C'); octave = 4; advance(s); }
-    else if (c == 'A') { name = NOTE_A; octave = 3; advance(s); }
-    else if (c == 'B') { name = NOTE_B; octave = 3; advance(s); }
-    else if (c >= 'c' && c <= 'g') { name = (NoteName)(c - 'c'); octave = 5; advance(s); }
-    else if (c == 'a') { name = NOTE_A; octave = 5; advance(s); }
-    else if (c == 'b') { name = NOTE_B; octave = 5; advance(s); }
+    // ABC standard: C-B = octave 4 (middle C octave), c-b = octave 5
+    if (c >= 'A' && c <= 'G') { name = (NoteName)((c - 'A' + 5) % 7); octave = 4; advance(s); }
+    else if (c >= 'a' && c <= 'g') { name = (NoteName)((c - 'a' + 5) % 7); octave = 5; advance(s); }
     else if (c == 'z' || c == 'Z') { name = NOTE_REST; advance(s); }
     else return 1;
 

@@ -120,20 +120,20 @@ TEST(octave_modifier_down) {
 }
 
 TEST(uppercase_ab_octave) {
-    // A and B uppercase should be octave 3 (below middle C)
+    // ABC standard: All uppercase letters A-G are octave 4
     int result = abc_parse(&g_sheet, "K:C\nA B C");
     ASSERT_EQ(result, 0);
     ASSERT_EQ(g_sheet.note_count, 3);
 
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_EQ(n->note_name, NOTE_A);
-    ASSERT_EQ(n->octave, 3);
+    ASSERT_EQ(n->octave, 4);  // A4 = 440 Hz
     n = note_next(&g_sheet, n);
     ASSERT_EQ(n->note_name, NOTE_B);
-    ASSERT_EQ(n->octave, 3);
+    ASSERT_EQ(n->octave, 4);  // B4
     n = note_next(&g_sheet, n);
     ASSERT_EQ(n->note_name, NOTE_C);
-    ASSERT_EQ(n->octave, 4);
+    ASSERT_EQ(n->octave, 4);  // C4 = middle C
     return 1;
 }
 
@@ -467,7 +467,7 @@ TEST(notes_after_repeat) {
 // ============================================================================
 
 TEST(frequency_a440) {
-    int result = abc_parse(&g_sheet, "K:C\nA'");  // A' = A3+1 = A4 = 440 Hz
+    int result = abc_parse(&g_sheet, "K:C\nA");  // A = A4 = 440 Hz
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_FLOAT_EQ(n->frequency_x10 / 10.0f, 440.0f, 1.0f);
@@ -495,7 +495,7 @@ TEST(midi_middle_c) {
 }
 
 TEST(midi_a440) {
-    int result = abc_parse(&g_sheet, "K:C\nA'");  // A' = A4 = MIDI 69
+    int result = abc_parse(&g_sheet, "K:C\nA");  // A = A4 = MIDI 69
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_EQ(n->midi_note, 69);
