@@ -27,3 +27,14 @@ target_link_libraries(abcparser PRIVATE abc_parser)
 if(UNIX)
     target_link_libraries(abcparser PRIVATE m)
 endif()
+
+# Test executable
+add_executable(test_parser test_parser.c)
+target_link_libraries(test_parser PRIVATE abc_parser)
+if(UNIX)
+    target_link_libraries(test_parser PRIVATE m)
+endif()
+
+# Enable CTest
+enable_testing()
+add_test(NAME parser_tests COMMAND test_parser)

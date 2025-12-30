@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/meesb/Documents/git/abcparser/build/Debug/test_parser.exe)",
+      "Bash(cmake --build:*)",
+      "Bash(./Debug/test_parser.exe:*)"
+    ]
+  }
+}

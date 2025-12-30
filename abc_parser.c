@@ -202,6 +202,11 @@ void sheet_reset(struct sheet *sheet) {
     sheet->tail_index = -1;
     sheet->note_count = 0;
     sheet->total_duration_ms = 0;
+    sheet->tempo_bpm = 120;
+    sheet->default_note_num = 1;
+    sheet->default_note_den = 8;
+    sheet->meter_num = 4;
+    sheet->meter_den = 4;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
     sheet->key[0] = '\0';
