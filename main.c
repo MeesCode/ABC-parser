@@ -63,26 +63,24 @@ int main(void) {
         printf("\n--- Voice %u: %s ---\n", v + 1, pool->voice_id);
         struct note *n = pool_first_note(pool);
         for (int i = 0; n && i < 100; i++) {
-            if (n->chord_size == 1 && n->note_name[0] == NOTE_REST) {
+            if (n->chord_size == 1 && midi_is_rest(n->midi_note[0])) {
                 printf("  %d: REST %u ms\n", i + 1, n->duration_ms);
             } else if (n->chord_size == 1) {
-                printf("  %d: %s%s%u @ %.1f Hz, %u ms\n",
+                printf("  %d: %s%u @ %.1f Hz, %u ms\n",
                        i + 1,
-                       note_name_to_string((NoteName)n->note_name[0]),
-                       accidental_to_string(n->accidental[0]),
-                       n->octave[0],
-                       n->frequency_x10[0] / 10.0f,
+                       note_name_to_string(midi_to_note_name(n->midi_note[0])),
+                       midi_to_octave(n->midi_note[0]),
+                       midi_to_frequency_x10(n->midi_note[0]) / 10.0f,
                        n->duration_ms);
             } else {
                 printf("  %d: [", i + 1);
                 for (uint8_t j = 0; j < n->chord_size; j++) {
                     if (j > 0) printf("+");
-                    printf("%s%s%u",
-                           note_name_to_string((NoteName)n->note_name[j]),
-                           accidental_to_string(n->accidental[j]),
-                           n->octave[j]);
+                    printf("%s%u",
+                           note_name_to_string(midi_to_note_name(n->midi_note[j])),
+                           midi_to_octave(n->midi_note[j]));
                 }
-                printf("] @ %.1f Hz, %u ms\n", n->frequency_x10[0] / 10.0f, n->duration_ms);
+                printf("] @ %.1f Hz, %u ms\n", midi_to_frequency_x10(n->midi_note[0]) / 10.0f, n->duration_ms);
             }
             n = note_next(pool, n);
         }

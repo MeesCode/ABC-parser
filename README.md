@@ -22,12 +22,14 @@ With default settings (2 voices, 128 notes per voice, 4 notes per chord):
 
 | Component | Size |
 |-----------|------|
-| Note struct | 30 bytes |
+| Note struct | 10 bytes |
 | Sheet struct | 96 bytes |
-| Note pool (128 notes) | 3,868 bytes |
-| **Total (2 voice pools)** | **~7.8 KB** |
+| Note pool (128 notes) | 1,308 bytes |
+| **Total (2 voice pools)** | **~2.7 KB** |
 
-For single-voice applications with `ABC_MAX_VOICES=1`: **~4 KB**
+For single-voice applications with `ABC_MAX_VOICES=1`: **~1.4 KB**
+
+Notes store only MIDI note numbers; frequency, note name, and octave are computed on demand via API functions.
 
 ## Building
 
@@ -73,9 +75,9 @@ int main(void) {
     // Iterate through notes (first voice)
     struct note *n = sheet_first_note(&g_sheet);
     while (n) {
-        float freq = n->frequency_x10[0] / 10.0f;  // Hz
-        uint16_t dur = n->duration_ms;              // milliseconds
-        uint8_t midi = n->midi_note[0];             // MIDI note number
+        uint8_t midi = n->midi_note[0];                      // MIDI note number
+        float freq = midi_to_frequency_x10(midi) / 10.0f;    // Hz (computed from MIDI)
+        uint16_t dur = n->duration_ms;                       // milliseconds
 
         // Use for synthesis...
 
@@ -125,10 +127,11 @@ struct note *n = sheet_first_note(&g_sheet);
 while (n) {
     printf("Chord with %d notes:\n", n->chord_size);
     for (int i = 0; i < n->chord_size; i++) {
+        uint8_t midi = n->midi_note[i];
         printf("  %s%d @ %.1f Hz\n",
-               note_name_to_string(n->note_name[i]),
-               n->octave[i],
-               n->frequency_x10[i] / 10.0f);
+               note_name_to_string(midi_to_note_name(midi)),
+               midi_to_octave(midi),
+               midi_to_frequency_x10(midi) / 10.0f);
     }
     n = note_next(&g_pools[0], n);
 }
@@ -215,15 +218,11 @@ struct note {
     int16_t next_index;                         // Index of next note (-1 = end)
     uint16_t duration_ms;                       // Duration in milliseconds
     uint8_t chord_size;                         // Number of notes (1 = single note)
-
-    // Arrays for chord support (index 0 is primary note)
-    uint16_t frequency_x10[ABC_MAX_CHORD_NOTES];  // Frequency * 10 in Hz
-    uint8_t midi_note[ABC_MAX_CHORD_NOTES];       // MIDI note numbers (0-127)
-    uint8_t note_name[ABC_MAX_CHORD_NOTES];       // NoteName enum values
-    uint8_t octave[ABC_MAX_CHORD_NOTES];          // Octaves (0-6)
-    int8_t accidental[ABC_MAX_CHORD_NOTES];       // Accidentals
+    uint8_t midi_note[ABC_MAX_CHORD_NOTES];     // MIDI note numbers (0-127, 0 = rest)
 };
 ```
+
+Note properties (frequency, note name, octave) are computed on demand from MIDI values using the utility functions.
 
 ### Note Pool Structure
 
@@ -265,7 +264,16 @@ struct note *note_next(const NotePool *pool, const struct note *n); // Next note
 struct note *note_get(const NotePool *pool, int index);            // Note by index
 ```
 
-### Utilities
+### MIDI Conversion (compute note properties from stored MIDI)
+
+```c
+uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10 in Hz
+NoteName midi_to_note_name(uint8_t midi);       // Returns note name (C, D, E, etc.)
+uint8_t midi_to_octave(uint8_t midi);           // Returns octave (0-10)
+int midi_is_rest(uint8_t midi);                 // Returns 1 if rest (midi == 0)
+```
+
+### Other Utilities
 
 ```c
 float note_to_frequency(NoteName name, int octave, int8_t acc);

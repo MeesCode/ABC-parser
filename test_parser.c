@@ -59,9 +59,9 @@ TEST(single_note_c) {
     ASSERT_EQ(NOTE_COUNT(), 1);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT(n != NULL);
-    ASSERT_EQ(n->note_name[0], NOTE_C);
-    ASSERT_EQ(n->octave[0], 4);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 4);
+    ASSERT_EQ(n->midi_note[0], 60);  // C4 = MIDI 60
     return 1;
 }
 
@@ -71,13 +71,13 @@ TEST(single_note_each) {
     ASSERT_EQ(NOTE_COUNT(), 7);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_C); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_D); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_E); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_F); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_G); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_A); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_B);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_D); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_E); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_F); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_G); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_A); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_B);
     return 1;
 }
 
@@ -87,11 +87,11 @@ TEST(lowercase_notes) {
     ASSERT_EQ(NOTE_COUNT(), 7);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_C);
-    ASSERT_EQ(n->octave[0], 5);  // lowercase c is octave 5
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 5);  // lowercase c is octave 5
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_D);
-    ASSERT_EQ(n->octave[0], 5);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_D);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 5);
     return 1;
 }
 
@@ -105,9 +105,9 @@ TEST(octave_modifier_up) {
     ASSERT_EQ(NOTE_COUNT(), 3);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->octave[0], 5); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->octave[0], 6); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->octave[0], 6);  // clamped to max 6
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 5); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 6); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 6);  // clamped to max 6
     return 1;
 }
 
@@ -117,9 +117,9 @@ TEST(octave_modifier_down) {
     ASSERT_EQ(NOTE_COUNT(), 3);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->octave[0], 4); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->octave[0], 3); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->octave[0], 2);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 4); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 3); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 2);
     return 1;
 }
 
@@ -130,14 +130,14 @@ TEST(uppercase_ab_octave) {
     ASSERT_EQ(NOTE_COUNT(), 3);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_A);
-    ASSERT_EQ(n->octave[0], 4);  // A4 = 440 Hz
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_A);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 4);  // A4 = 440 Hz
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_B);
-    ASSERT_EQ(n->octave[0], 4);  // B4
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_B);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 4);  // B4
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_C);
-    ASSERT_EQ(n->octave[0], 4);  // C4 = middle C
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 4);  // C4 = middle C
     return 1;
 }
 
@@ -150,8 +150,8 @@ TEST(sharp) {
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 1);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_F);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP);
+    // F4 = MIDI 65, F#4 = MIDI 66
+    ASSERT_EQ(n->midi_note[0], 66);
     return 1;
 }
 
@@ -160,18 +160,18 @@ TEST(flat) {
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 1);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_B);
-    ASSERT_EQ(n->accidental[0], ACC_FLAT);
+    // B4 = MIDI 71, Bb4 = MIDI 70
+    ASSERT_EQ(n->midi_note[0], 70);
     return 1;
 }
 
 TEST(natural) {
-    int result = abc_parse(&g_sheet, "K:G\n=F");  // G major has F#
+    int result = abc_parse(&g_sheet, "K:G\n=F");  // G major has F#, natural cancels it
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 1);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_F);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);  // natural cancels to none
+    // F4 = MIDI 65 (natural F, not F#)
+    ASSERT_EQ(n->midi_note[0], 65);
     return 1;
 }
 
@@ -179,7 +179,8 @@ TEST(double_sharp) {
     int result = abc_parse(&g_sheet, "K:C\n^^C");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_DOUBLE_SHARP);
+    // C4 = MIDI 60, C##4 = MIDI 62 (same as D)
+    ASSERT_EQ(n->midi_note[0], 62);
     return 1;
 }
 
@@ -187,7 +188,8 @@ TEST(double_flat) {
     int result = abc_parse(&g_sheet, "K:C\n__B");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_DOUBLE_FLAT);
+    // B4 = MIDI 71, Bbb4 = MIDI 69 (same as A)
+    ASSERT_EQ(n->midi_note[0], 69);
     return 1;
 }
 
@@ -198,9 +200,10 @@ TEST(accidental_persists_in_bar) {
     ASSERT_EQ(NOTE_COUNT(), 3);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP);
+    // All F's should be F#4 = MIDI 66
+    ASSERT_EQ(n->midi_note[0], 66); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(n->midi_note[0], 66); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(n->midi_note[0], 66);
     return 1;
 }
 
@@ -211,8 +214,9 @@ TEST(accidental_resets_at_bar) {
     ASSERT_EQ(NOTE_COUNT(), 2);
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);  // reset after bar
+    // First F is F#4 = MIDI 66, second F resets to F4 = MIDI 65
+    ASSERT_EQ(n->midi_note[0], 66); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(n->midi_note[0], 65);  // reset after bar
     return 1;
 }
 
@@ -347,8 +351,8 @@ TEST(rest_lowercase) {
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 1);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_REST);
-    ASSERT_EQ(n->frequency_x10[0], 0);
+    ASSERT(midi_is_rest(n->midi_note[0]));
+    ASSERT_EQ(midi_to_frequency_x10(n->midi_note[0]), 0);
     return 1;
 }
 
@@ -356,7 +360,7 @@ TEST(rest_uppercase) {
     int result = abc_parse(&g_sheet, "K:C\nZ");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_REST);
+    ASSERT(midi_is_rest(n->midi_note[0]));
     return 1;
 }
 
@@ -364,7 +368,7 @@ TEST(rest_with_duration) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nz2");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_REST);
+    ASSERT(midi_is_rest(n->midi_note[0]));
     ASSERT_EQ(n->duration_ms, 500);
     return 1;
 }
@@ -377,7 +381,8 @@ TEST(key_c_major) {
     int result = abc_parse(&g_sheet, "K:C\nF");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);
+    // F4 = MIDI 65 (natural F in C major)
+    ASSERT_EQ(n->midi_note[0], 65);
     return 1;
 }
 
@@ -386,7 +391,8 @@ TEST(key_g_major) {
     int result = abc_parse(&g_sheet, "K:G\nF");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP);
+    // F#4 = MIDI 66 (F is sharp in G major)
+    ASSERT_EQ(n->midi_note[0], 66);
     return 1;
 }
 
@@ -395,7 +401,8 @@ TEST(key_f_major) {
     int result = abc_parse(&g_sheet, "K:F\nB");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_FLAT);
+    // Bb4 = MIDI 70 (B is flat in F major)
+    ASSERT_EQ(n->midi_note[0], 70);
     return 1;
 }
 
@@ -404,8 +411,9 @@ TEST(key_d_major) {
     int result = abc_parse(&g_sheet, "K:D\nF C");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->accidental[0], ACC_SHARP);
+    // F#4 = MIDI 66, C#4 = MIDI 61
+    ASSERT_EQ(n->midi_note[0], 66); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(n->midi_note[0], 61);
     return 1;
 }
 
@@ -414,8 +422,9 @@ TEST(key_a_minor) {
     int result = abc_parse(&g_sheet, "K:Am\nF C");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_NONE); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);
+    // F4 = MIDI 65, C4 = MIDI 60 (natural)
+    ASSERT_EQ(n->midi_note[0], 65); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(n->midi_note[0], 60);
     return 1;
 }
 
@@ -423,7 +432,8 @@ TEST(key_amin_alternate) {
     int result = abc_parse(&g_sheet, "K:Amin\nF");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);
+    // F4 = MIDI 65 (natural in A minor)
+    ASSERT_EQ(n->midi_note[0], 65);
     return 1;
 }
 
@@ -513,10 +523,10 @@ TEST(simple_repeat) {
     ASSERT_EQ(NOTE_COUNT(), 4);  // C D C D
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_C); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_D); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_C); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_D);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_D); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_D);
     return 1;
 }
 
@@ -533,12 +543,12 @@ TEST(notes_before_repeat) {
     ASSERT_EQ(NOTE_COUNT(), 6);  // A B C D C D
 
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->note_name[0], NOTE_A); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_B); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_C); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_D); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_C); n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->note_name[0], NOTE_D);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_A); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_B); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_D); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C); n = note_next(&g_pools[0], n);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_D);
     return 1;
 }
 
@@ -557,7 +567,7 @@ TEST(frequency_a440) {
     int result = abc_parse(&g_sheet, "K:C\nA");  // A = A4 = 440 Hz
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_FLOAT_EQ(n->frequency_x10[0] / 10.0f, 440.0f, 1.0f);
+    ASSERT_FLOAT_EQ(midi_to_frequency_x10(n->midi_note[0]) / 10.0f, 440.0f, 1.0f);
     return 1;
 }
 
@@ -565,7 +575,7 @@ TEST(frequency_middle_c) {
     int result = abc_parse(&g_sheet, "K:C\nC");  // C4 = 261.63 Hz
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_FLOAT_EQ(n->frequency_x10[0] / 10.0f, 261.6f, 1.0f);
+    ASSERT_FLOAT_EQ(midi_to_frequency_x10(n->midi_note[0]) / 10.0f, 261.6f, 1.0f);
     return 1;
 }
 
@@ -713,9 +723,9 @@ TEST(simple_chord) {
     ASSERT_EQ(NOTE_COUNT(), 1);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_EQ(n->chord_size, 3);
-    ASSERT_EQ(n->note_name[0], NOTE_C);
-    ASSERT_EQ(n->note_name[1], NOTE_E);
-    ASSERT_EQ(n->note_name[2], NOTE_G);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_C);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[1]), NOTE_E);
+    ASSERT_EQ(midi_to_note_name(n->midi_note[2]), NOTE_G);
     return 1;
 }
 
@@ -724,9 +734,9 @@ TEST(chord_with_octaves) {
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_EQ(n->chord_size, 3);
-    ASSERT_EQ(n->octave[0], 5);  // lowercase
-    ASSERT_EQ(n->octave[1], 5);
-    ASSERT_EQ(n->octave[2], 5);
+    ASSERT_EQ(midi_to_octave(n->midi_note[0]), 5);  // lowercase
+    ASSERT_EQ(midi_to_octave(n->midi_note[1]), 5);
+    ASSERT_EQ(midi_to_octave(n->midi_note[2]), 5);
     return 1;
 }
 
@@ -735,9 +745,10 @@ TEST(chord_with_accidentals) {
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT_EQ(n->chord_size, 3);
-    ASSERT_EQ(n->accidental[0], ACC_NONE);
-    ASSERT_EQ(n->accidental[1], ACC_SHARP);
-    ASSERT_EQ(n->accidental[2], ACC_FLAT);
+    // C4 = MIDI 60, E#4 = MIDI 65 (E4=64 + 1), Bb4 = MIDI 70
+    ASSERT_EQ(n->midi_note[0], 60);  // C4
+    ASSERT_EQ(n->midi_note[1], 65);  // E#4 (F4)
+    ASSERT_EQ(n->midi_note[2], 70);  // Bb4
     return 1;
 }
 

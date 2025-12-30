@@ -61,17 +61,12 @@ typedef enum {
 
 // Note structure - supports chords (multiple pitches with same duration)
 // Uses index-based linking instead of pointers for relocatable memory
+// Only stores MIDI notes - frequency/name/octave computed via API functions
 struct note {
     int16_t next_index;         // Index of next note (-1 = end of list)
     uint16_t duration_ms;       // Duration in milliseconds (max ~65 seconds)
     uint8_t chord_size;         // Number of notes in chord (1 = single note)
-
-    // Arrays for chord support (index 0 is primary note, rest are chord tones)
-    uint16_t frequency_x10[ABC_MAX_CHORD_NOTES];  // Frequency * 10 in Hz
-    uint8_t midi_note[ABC_MAX_CHORD_NOTES];       // MIDI note numbers (0-127)
-    uint8_t note_name[ABC_MAX_CHORD_NOTES];       // NoteName values
-    uint8_t octave[ABC_MAX_CHORD_NOTES];          // Octaves
-    int8_t accidental[ABC_MAX_CHORD_NOTES];       // Accidentals
+    uint8_t midi_note[ABC_MAX_CHORD_NOTES];  // MIDI note numbers (0-127, 0 = rest)
 };
 
 // Pre-allocated note pool (one per voice)
@@ -163,8 +158,17 @@ struct note *sheet_first_note(const struct sheet *sheet);
 // Utility Functions
 // ============================================================================
 
+// Convert note properties to MIDI/frequency (used internally by parser)
 float note_to_frequency(NoteName name, int octave, int8_t acc);
 int note_to_midi(NoteName name, int octave, int8_t acc);
+
+// Get note properties from MIDI number (use these to decode stored notes)
+uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10
+NoteName midi_to_note_name(uint8_t midi);       // Returns note name (C, D, E, etc.)
+uint8_t midi_to_octave(uint8_t midi);           // Returns octave (0-10)
+int midi_is_rest(uint8_t midi);                 // Returns 1 if rest (midi == 0)
+
+// String conversion helpers
 const char *note_name_to_string(NoteName name);
 const char *accidental_to_string(int8_t acc);
 
