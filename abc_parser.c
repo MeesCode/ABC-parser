@@ -86,9 +86,10 @@ typedef struct {
     int16_t repeat_start_index;
     int16_t repeat_end_index;
     uint8_t in_repeat;
-    uint8_t tuplet_remaining;    // Notes remaining in current tuplet
-    uint8_t tuplet_num;          // Tuplet: play this many notes...
-    uint8_t tuplet_in_time;      // ...in the time of this many
+    uint8_t tuplet_remaining;
+    uint8_t tuplet_num;
+    uint8_t tuplet_in_time;
+    uint8_t current_voice;       // Current voice index
 } ParserState;
 
 // ============================================================================
@@ -154,10 +155,19 @@ void note_pool_init(NotePool *pool) {
     if (!pool) return;
     pool->count = 0;
     pool->capacity = ABC_MAX_NOTES;
+    pool->head_index = -1;
+    pool->tail_index = -1;
+    pool->total_duration_ms = 0;
+    pool->voice_id[0] = '\0';
 }
 
 void note_pool_reset(NotePool *pool) {
-    if (pool) pool->count = 0;
+    if (!pool) return;
+    pool->count = 0;
+    pool->head_index = -1;
+    pool->tail_index = -1;
+    pool->total_duration_ms = 0;
+    pool->voice_id[0] = '\0';
 }
 
 int note_pool_available(const NotePool *pool) {
@@ -170,12 +180,15 @@ static int16_t note_pool_alloc(NotePool *pool) {
     pool->count++;
     struct note *n = &pool->notes[index];
     n->next_index = -1;
-    n->frequency_x10 = 0;
     n->duration_ms = 0;
-    n->note_name = NOTE_C;
-    n->octave = 4;
-    n->accidental = ACC_NONE;
-    n->midi_note = 0;
+    n->chord_size = 0;
+    for (int i = 0; i < ABC_MAX_CHORD_NOTES; i++) {
+        n->frequency_x10[i] = 0;
+        n->midi_note[i] = 0;
+        n->note_name[i] = NOTE_C;
+        n->octave[i] = 4;
+        n->accidental[i] = ACC_NONE;
+    }
     return index;
 }
 
@@ -183,16 +196,14 @@ static int16_t note_pool_alloc(NotePool *pool) {
 // Sheet functions
 // ============================================================================
 
-void sheet_init(struct sheet *sheet, NotePool *pool) {
+void sheet_init(struct sheet *sheet, NotePool *pools, uint8_t pool_count) {
     if (!sheet) return;
-    sheet->note_pool = pool;
-    sheet->head_index = -1;
-    sheet->tail_index = -1;
-    sheet->note_count = 0;
+    sheet->pools = pools;
+    sheet->pool_count = pool_count;
+    sheet->voice_count = 0;
     sheet->tempo_bpm = 120;
     sheet->tempo_note_num = 1;
-    sheet->tempo_note_den = 4;  // Default: quarter note = BPM
-    sheet->total_duration_ms = 0;
+    sheet->tempo_note_den = 4;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
     sheet->key[0] = '\0';
@@ -200,18 +211,22 @@ void sheet_init(struct sheet *sheet, NotePool *pool) {
     sheet->default_note_den = 8;
     sheet->meter_num = 4;
     sheet->meter_den = 4;
+
+    // Initialize all pools
+    for (uint8_t i = 0; i < pool_count; i++) {
+        note_pool_init(&pools[i]);
+    }
 }
 
 void sheet_reset(struct sheet *sheet) {
     if (!sheet) return;
-    if (sheet->note_pool) note_pool_reset(sheet->note_pool);
-    sheet->head_index = -1;
-    sheet->tail_index = -1;
-    sheet->note_count = 0;
-    sheet->total_duration_ms = 0;
+    for (uint8_t i = 0; i < sheet->pool_count; i++) {
+        note_pool_reset(&sheet->pools[i]);
+    }
+    sheet->voice_count = 0;
     sheet->tempo_bpm = 120;
     sheet->tempo_note_num = 1;
-    sheet->tempo_note_den = 4;  // Default: quarter note = BPM
+    sheet->tempo_note_den = 4;
     sheet->default_note_num = 1;
     sheet->default_note_den = 8;
     sheet->meter_num = 4;
@@ -221,46 +236,57 @@ void sheet_reset(struct sheet *sheet) {
     sheet->key[0] = '\0';
 }
 
-struct note *note_get(const struct sheet *sheet, int index) {
-    if (!sheet || !sheet->note_pool) return NULL;
-    if (index < 0 || index >= (int)sheet->note_pool->count) return NULL;
-    return &sheet->note_pool->notes[index];
+struct note *note_get(const NotePool *pool, int index) {
+    if (!pool) return NULL;
+    if (index < 0 || index >= (int)pool->count) return NULL;
+    return (struct note *)&pool->notes[index];
 }
 
+struct note *pool_first_note(const NotePool *pool) {
+    return pool ? note_get(pool, pool->head_index) : NULL;
+}
+
+struct note *note_next(const NotePool *pool, const struct note *current) {
+    return (pool && current) ? note_get(pool, current->next_index) : NULL;
+}
+
+// Legacy compatibility - uses first pool
 struct note *sheet_first_note(const struct sheet *sheet) {
-    return sheet ? note_get(sheet, sheet->head_index) : NULL;
+    if (!sheet || !sheet->pools || sheet->pool_count == 0) return NULL;
+    return pool_first_note(&sheet->pools[0]);
 }
 
-struct note *note_next(const struct sheet *sheet, const struct note *current) {
-    return (sheet && current) ? note_get(sheet, current->next_index) : NULL;
-}
+// Append a note/chord to a specific pool
+static int pool_append_note(NotePool *pool, uint8_t chord_size,
+                            NoteName *names, int *octaves,
+                            int8_t *accs, uint16_t duration_ms) {
+    if (!pool) return -1;
 
-static int sheet_append_note(struct sheet *sheet, NoteName name, int octave,
-                              int8_t acc, uint16_t duration_ms) {
-    if (!sheet || !sheet->note_pool) return -1;
-
-    int16_t index = note_pool_alloc(sheet->note_pool);
+    int16_t index = note_pool_alloc(pool);
     if (index < 0) return -1;
 
-    struct note *n = &sheet->note_pool->notes[index];
-    n->note_name = name;
-    n->octave = (uint8_t)octave;
-    n->accidental = acc;
+    struct note *n = &pool->notes[index];
+    n->chord_size = chord_size;
     n->duration_ms = duration_ms;
-    n->frequency_x10 = note_to_frequency_x10(name, octave, acc);
-    n->midi_note = (uint8_t)note_to_midi(name, octave, acc);
     n->next_index = -1;
 
-    if (sheet->head_index < 0) {
-        sheet->head_index = index;
-        sheet->tail_index = index;
-    } else {
-        sheet->note_pool->notes[sheet->tail_index].next_index = index;
-        sheet->tail_index = index;
+    for (uint8_t i = 0; i < chord_size && i < ABC_MAX_CHORD_NOTES; i++) {
+        n->note_name[i] = names[i];
+        n->octave[i] = (uint8_t)octaves[i];
+        n->accidental[i] = accs[i];
+        n->frequency_x10[i] = note_to_frequency_x10(names[i], octaves[i], accs[i]);
+        n->midi_note[i] = (uint8_t)note_to_midi(names[i], octaves[i], accs[i]);
     }
 
-    sheet->note_count++;
-    sheet->total_duration_ms += duration_ms;
+    if (pool->head_index < 0) {
+        pool->head_index = index;
+        pool->tail_index = index;
+    } else {
+        pool->notes[pool->tail_index].next_index = index;
+        pool->tail_index = index;
+    }
+
+    pool->total_duration_ms += duration_ms;
     return 0;
 }
 
@@ -285,15 +311,11 @@ static void skip_whitespace(ParserState *s) {
 }
 
 static uint16_t calculate_duration_ms(ParserState *s, int num, int den) {
-    // Calculate ms per tempo note (e.g., if Q:1/8=120, tempo_note is 1/8)
     uint32_t tempo_note_ms = 60000 / s->tempo_bpm;
-    // Convert to ms per whole note: tempo_note_ms * (tempo_note_den / tempo_note_num)
     uint32_t whole_note_ms = tempo_note_ms * s->tempo_note_den / s->tempo_note_num;
-    // Calculate default note duration
     uint32_t default_ms = whole_note_ms * s->default_num / s->default_den;
     uint32_t duration = default_ms * num / den;
 
-    // Apply tuplet scaling if active
     if (s->tuplet_remaining > 0) {
         duration = duration * s->tuplet_in_time / s->tuplet_num;
         s->tuplet_remaining--;
@@ -318,6 +340,27 @@ static void safe_strcpy(char *dest, uint8_t dest_size, const char *src, uint8_t 
     dest[len] = '\0';
 }
 
+// Find or create a voice by ID, returns voice index
+static int find_or_create_voice(struct sheet *sheet, const char *voice_id, uint8_t id_len) {
+    // Search existing voices
+    for (uint8_t i = 0; i < sheet->voice_count; i++) {
+        if (strncmp(sheet->pools[i].voice_id, voice_id, id_len) == 0 &&
+            sheet->pools[i].voice_id[id_len] == '\0') {
+            return i;
+        }
+    }
+
+    // Create new voice if space available
+    if (sheet->voice_count < sheet->pool_count) {
+        uint8_t idx = sheet->voice_count;
+        safe_strcpy(sheet->pools[idx].voice_id, ABC_MAX_VOICE_ID_LEN, voice_id, id_len);
+        sheet->voice_count++;
+        return idx;
+    }
+
+    return -1; // No space for more voices
+}
+
 // ============================================================================
 // Header parsing
 // ============================================================================
@@ -331,12 +374,10 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
         uint16_t start = s->pos + 2;
         uint16_t end = start;
 
-        // Find end of line
         while (end < s->len && s->input[end] != '\n' && s->input[end] != '\r') end++;
         uint16_t line_end = end;
-        if (end < s->len) end++; // skip newline
+        if (end < s->len) end++;
 
-        // Trim whitespace
         while (start < line_end && s->input[start] == ' ') start++;
         while (line_end > start && (s->input[line_end-1] == ' ' || s->input[line_end-1] == '\t')) line_end--;
 
@@ -344,6 +385,7 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
         const char *val = s->input + start;
 
         switch (field) {
+            case 'X': break; // Reference number, ignore
             case 'T': safe_strcpy(sheet->title, ABC_MAX_TITLE_LEN, val, vlen); break;
             case 'C': safe_strcpy(sheet->composer, ABC_MAX_COMPOSER_LEN, val, vlen); break;
             case 'L': {
@@ -375,16 +417,13 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
                 break;
             }
             case 'Q': {
-                // Q: field formats: "Q:120" or "Q:1/4=120"
                 int tempo = 0, note_num = 0, note_den = 0;
                 uint8_t i = 0;
-                // Look for '=' sign (Q:1/4=120 format)
                 uint8_t eq_pos = 0;
                 for (uint8_t j = 0; j < vlen; j++) {
                     if (val[j] == '=') { eq_pos = j + 1; break; }
                 }
                 if (eq_pos > 0) {
-                    // Parse note value before '=' (e.g., "1/4")
                     while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
                         note_num = note_num * 10 + (val[i++] - '0');
                     }
@@ -399,7 +438,6 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
                         s->tempo_note_den = sheet->tempo_note_den = (uint8_t)note_den;
                     }
                 }
-                // Parse BPM after '=' or from start if no '='
                 i = eq_pos;
                 while (i < vlen && val[i] >= '0' && val[i] <= '9') {
                     tempo = tempo * 10 + (val[i++] - '0');
@@ -419,13 +457,18 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
 }
 
 // ============================================================================
-// Note parsing
+// Single pitch parsing (used for both single notes and chord members)
 // ============================================================================
 
-static int parse_single_note(ParserState *s, struct sheet *sheet) {
-    skip_whitespace(s);
-    if (s->pos >= s->len) return 1;
+typedef struct {
+    NoteName name;
+    int octave;
+    int8_t accidental;
+    int dur_num;
+    int dur_den;
+} ParsedPitch;
 
+static int parse_pitch(ParserState *s, ParsedPitch *pitch) {
     char c = peek(s);
     int8_t acc = ACC_NONE;
     int explicit_acc = 0;
@@ -442,11 +485,10 @@ static int parse_single_note(ParserState *s, struct sheet *sheet) {
     NoteName name;
     int octave = 4;
 
-    // ABC standard: C-B = octave 4 (middle C octave), c-b = octave 5
     if (c >= 'A' && c <= 'G') { name = (NoteName)((c - 'A' + 5) % 7); octave = 4; advance(s); }
     else if (c >= 'a' && c <= 'g') { name = (NoteName)((c - 'a' + 5) % 7); octave = 5; advance(s); }
     else if (c == 'z' || c == 'Z') { name = NOTE_REST; advance(s); }
-    else return 1;
+    else return -1;
 
     if (!explicit_acc && name != NOTE_REST) {
         acc = s->bar_accidentals[name] ? s->bar_accidentals[name] : s->key_accidentals[name];
@@ -464,6 +506,7 @@ static int parse_single_note(ParserState *s, struct sheet *sheet) {
     if (octave < 0) octave = 0;
     if (octave > 6) octave = 6;
 
+    // Parse duration modifiers
     int num = 1, den = 1;
     c = peek(s);
     if (c >= '0' && c <= '9') {
@@ -482,18 +525,119 @@ static int parse_single_note(ParserState *s, struct sheet *sheet) {
         }
     }
 
-    uint16_t duration = calculate_duration_ms(s, num, den);
-    return sheet_append_note(sheet, name, octave, acc, duration);
+    pitch->name = name;
+    pitch->octave = octave;
+    pitch->accidental = acc;
+    pitch->dur_num = num;
+    pitch->dur_den = den;
+    return 0;
 }
 
-static int copy_repeat_section(struct sheet *sheet, int16_t start_idx, int16_t end_idx) {
-    if (!sheet || !sheet->note_pool || start_idx < 0) return 0;
+// ============================================================================
+// Note/Chord parsing
+// ============================================================================
+
+static int parse_note_or_chord(ParserState *s, struct sheet *sheet) {
+    skip_whitespace(s);
+    if (s->pos >= s->len) return 1;
+
+    char c = peek(s);
+    NotePool *pool = &sheet->pools[s->current_voice];
+
+    // Handle chord [...]
+    if (c == '[') {
+        advance(s); // skip '['
+
+        NoteName names[ABC_MAX_CHORD_NOTES];
+        int octaves[ABC_MAX_CHORD_NOTES];
+        int8_t accs[ABC_MAX_CHORD_NOTES];
+        uint8_t chord_size = 0;
+        int total_dur_num = 1, total_dur_den = 1;
+
+        while (peek(s) != ']' && s->pos < s->len && chord_size < ABC_MAX_CHORD_NOTES) {
+            skip_whitespace(s);
+            c = peek(s);
+
+            // Skip if not a note character
+            if (!((c >= 'A' && c <= 'G') || (c >= 'a' && c <= 'g') ||
+                  c == 'z' || c == 'Z' || c == '^' || c == '_' || c == '=')) {
+                if (c == ']') break;
+                advance(s);
+                continue;
+            }
+
+            ParsedPitch pitch;
+            if (parse_pitch(s, &pitch) == 0) {
+                names[chord_size] = pitch.name;
+                octaves[chord_size] = pitch.octave;
+                accs[chord_size] = pitch.accidental;
+                // Use last pitch's duration for the chord
+                total_dur_num = pitch.dur_num;
+                total_dur_den = pitch.dur_den;
+                chord_size++;
+            }
+        }
+
+        if (peek(s) == ']') advance(s); // skip ']'
+
+        // Check for duration after chord
+        c = peek(s);
+        if (c >= '0' && c <= '9') {
+            total_dur_num = 0;
+            while (c >= '0' && c <= '9') { total_dur_num = total_dur_num * 10 + (c - '0'); advance(s); c = peek(s); }
+        }
+        if (c == '/') {
+            advance(s);
+            c = peek(s);
+            if (c >= '0' && c <= '9') {
+                total_dur_den = 0;
+                while (c >= '0' && c <= '9') { total_dur_den = total_dur_den * 10 + (c - '0'); advance(s); c = peek(s); }
+            } else {
+                total_dur_den = 2;
+                while (peek(s) == '/') { advance(s); total_dur_den *= 2; }
+            }
+        }
+
+        if (chord_size > 0) {
+            uint16_t duration = calculate_duration_ms(s, total_dur_num, total_dur_den);
+            return pool_append_note(pool, chord_size, names, octaves, accs, duration);
+        }
+        return 0;
+    }
+
+    // Handle single note
+    ParsedPitch pitch;
+    if (parse_pitch(s, &pitch) == 0) {
+        NoteName names[1] = { pitch.name };
+        int octaves[1] = { pitch.octave };
+        int8_t accs[1] = { pitch.accidental };
+        uint16_t duration = calculate_duration_ms(s, pitch.dur_num, pitch.dur_den);
+        return pool_append_note(pool, 1, names, octaves, accs, duration);
+    }
+
+    return 1; // Not a note
+}
+
+static int copy_repeat_section(NotePool *pool, int16_t start_idx, int16_t end_idx) {
+    if (!pool || start_idx < 0) return 0;
 
     int16_t cur = start_idx;
-    while (cur >= 0 && cur <= end_idx && cur < (int16_t)sheet->note_pool->count) {
-        struct note *src = &sheet->note_pool->notes[cur];
-        if (sheet_append_note(sheet, (NoteName)src->note_name, src->octave,
-                               src->accidental, src->duration_ms) < 0) return -1;
+    while (cur >= 0 && cur <= end_idx && cur < (int16_t)pool->count) {
+        struct note *src = &pool->notes[cur];
+
+        NoteName names[ABC_MAX_CHORD_NOTES];
+        int octaves[ABC_MAX_CHORD_NOTES];
+        int8_t accs[ABC_MAX_CHORD_NOTES];
+
+        for (uint8_t i = 0; i < src->chord_size && i < ABC_MAX_CHORD_NOTES; i++) {
+            names[i] = (NoteName)src->note_name[i];
+            octaves[i] = src->octave[i];
+            accs[i] = src->accidental[i];
+        }
+
+        if (pool_append_note(pool, src->chord_size, names, octaves, accs, src->duration_ms) < 0) {
+            return -1;
+        }
         cur = src->next_index;
         if (cur < 0) break;
     }
@@ -504,12 +648,49 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
     s->repeat_start_index = -1;
     s->repeat_end_index = -1;
     s->in_repeat = 0;
+    s->current_voice = 0;
+
+    // Don't create default voice yet - wait to see if V: line comes first
 
     while (s->pos < s->len) {
         skip_whitespace(s);
         if (s->pos >= s->len) break;
 
         char c = peek(s);
+
+        // Handle V: voice change (inline) BEFORE getting pool reference
+        if (c == 'V' && s->pos + 1 < s->len && s->input[s->pos + 1] == ':') {
+            advance(s); // V
+            advance(s); // :
+
+            uint16_t id_start = s->pos;
+            while (s->pos < s->len && s->input[s->pos] != '\n' && s->input[s->pos] != '\r') {
+                s->pos++;
+            }
+            uint8_t id_len = (uint8_t)(s->pos - id_start);
+
+            // Trim whitespace
+            while (id_len > 0 && (s->input[id_start] == ' ' || s->input[id_start] == '\t')) {
+                id_start++; id_len--;
+            }
+            while (id_len > 0 && (s->input[id_start + id_len - 1] == ' ' || s->input[id_start + id_len - 1] == '\t')) {
+                id_len--;
+            }
+
+            int voice_idx = find_or_create_voice(sheet, s->input + id_start, id_len);
+            if (voice_idx >= 0) {
+                s->current_voice = (uint8_t)voice_idx;
+            }
+            continue;
+        }
+
+        // Create default voice if none exists and we're about to parse notes
+        if (sheet->voice_count == 0 && sheet->pool_count > 0) {
+            sheet->voice_count = 1;
+            safe_strcpy(sheet->pools[0].voice_id, ABC_MAX_VOICE_ID_LEN, "default", 7);
+        }
+
+        NotePool *pool = &sheet->pools[s->current_voice];
 
         if (c == '|') {
             advance(s);
@@ -518,7 +699,7 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             if (c == ':') {
                 advance(s);
                 s->in_repeat = 1;
-                s->repeat_start_index = sheet->note_pool ? (int16_t)sheet->note_pool->count : 0;
+                s->repeat_start_index = (int16_t)pool->count;
             } else if (c == '|' || c == ']') {
                 advance(s);
             }
@@ -529,13 +710,13 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             advance(s);
             if (peek(s) == '|') {
                 advance(s);
-                s->repeat_end_index = sheet->note_pool ? (int16_t)(sheet->note_pool->count - 1) : -1;
+                s->repeat_end_index = (int16_t)(pool->count - 1);
                 if (peek(s) == ':') {
                     advance(s);
-                    if (copy_repeat_section(sheet, s->repeat_start_index, s->repeat_end_index) < 0) return -2;
-                    s->repeat_start_index = sheet->note_pool ? (int16_t)sheet->note_pool->count : 0;
+                    if (copy_repeat_section(pool, s->repeat_start_index, s->repeat_end_index) < 0) return -2;
+                    s->repeat_start_index = (int16_t)pool->count;
                 } else {
-                    if (copy_repeat_section(sheet, s->repeat_start_index, s->repeat_end_index) < 0) return -2;
+                    if (copy_repeat_section(pool, s->repeat_start_index, s->repeat_end_index) < 0) return -2;
                     s->in_repeat = 0;
                     s->repeat_start_index = -1;
                 }
@@ -543,7 +724,7 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             continue;
         }
 
-        // Handle tuplet markers: (2, (3, (4, (5, (6, (7
+        // Handle tuplet markers
         if (c == '(') {
             advance(s);
             c = peek(s);
@@ -552,20 +733,17 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
                 advance(s);
                 s->tuplet_num = n;
                 s->tuplet_remaining = n;
-                // Default "in time of" values per ABC standard:
-                // (2 = 2 in time of 3, (3 = 3 in time of 2,
-                // (4 = 4 in time of 3, (5-7 = n in time of n-1 for compound, or 2 for simple
                 if (n == 2) s->tuplet_in_time = 3;
                 else if (n == 3) s->tuplet_in_time = 2;
                 else if (n == 4) s->tuplet_in_time = 3;
-                else if (n == 6) s->tuplet_in_time = 2;  // Two beats in compound time
-                else s->tuplet_in_time = n - 1;  // General case
+                else if (n == 6) s->tuplet_in_time = 2;
+                else s->tuplet_in_time = n - 1;
             }
             continue;
         }
 
-        if (c == '[' || c == ']' || c == ')' ||
-            c == '{' || c == '}' || c == '!' || c == '+' ||
+        // Skip decorations
+        if (c == ')' || c == '{' || c == '}' || c == '!' || c == '+' ||
             c == '-' || c == '<' || c == '>' || c == '~' || c == '%') {
             advance(s);
             continue;
@@ -578,7 +756,7 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             continue;
         }
 
-        int result = parse_single_note(s, sheet);
+        int result = parse_note_or_chord(s, sheet);
         if (result < 0) return -2;
         if (result > 0) advance(s);
     }
@@ -590,7 +768,7 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
 // ============================================================================
 
 int abc_parse(struct sheet *sheet, const char *abc_string) {
-    if (!sheet || !abc_string || !sheet->note_pool) return -1;
+    if (!sheet || !abc_string || !sheet->pools || sheet->pool_count == 0) return -1;
 
     uint16_t len = 0;
     while (abc_string[len] && len < 0xFFFF) len++;
@@ -611,7 +789,8 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
         .in_repeat = 0,
         .tuplet_remaining = 0,
         .tuplet_num = 0,
-        .tuplet_in_time = 0
+        .tuplet_in_time = 0,
+        .current_voice = 0
     };
     memset(s.key_accidentals, 0, 7);
     memset(s.bar_accidentals, 0, 7);
@@ -634,31 +813,45 @@ void sheet_print(const struct sheet *sheet) {
     printf("Tempo: %u BPM\n", sheet->tempo_bpm);
     printf("Meter: %u/%u\n", sheet->meter_num, sheet->meter_den);
     printf("Default note: %u/%u\n", sheet->default_note_num, sheet->default_note_den);
-    printf("Total notes: %u\n", sheet->note_count);
-    printf("Total duration: %lu ms (%.2f s)\n",
-           (unsigned long)sheet->total_duration_ms, sheet->total_duration_ms / 1000.0f);
-    if (sheet->note_pool) {
-        printf("Pool usage: %u/%u notes\n", sheet->note_pool->count, sheet->note_pool->capacity);
-    }
+    printf("Voices: %u\n", sheet->voice_count);
 
-    printf("\n--- Notes ---\n");
-    printf("%-4s %-6s %-4s %-10s %-8s %-5s\n", "#", "Note", "Oct", "Freq", "Dur", "MIDI");
-    printf("----------------------------------------------\n");
+    for (uint8_t v = 0; v < sheet->voice_count; v++) {
+        NotePool *pool = &sheet->pools[v];
+        printf("\n--- Voice %u: %s ---\n", v + 1, pool->voice_id[0] ? pool->voice_id : "(unnamed)");
+        printf("Notes: %u, Duration: %lu ms (%.2f s)\n",
+               pool->count, (unsigned long)pool->total_duration_ms, pool->total_duration_ms / 1000.0f);
 
-    int i = 1;
-    struct note *n = sheet_first_note(sheet);
-    while (n) {
-        if (n->note_name == NOTE_REST) {
-            printf("%-4d %-6s %-4s %-10s %-8u %-5s\n", i, "rest", "-", "-", n->duration_ms, "-");
-        } else {
-            char ns[8];
-            snprintf(ns, sizeof(ns), "%s%s", note_name_to_string((NoteName)n->note_name),
-                     accidental_to_string(n->accidental));
-            printf("%-4d %-6s %-4u %-10.2f %-8u %-5u\n",
-                   i, ns, n->octave, n->frequency_x10 / 10.0f, n->duration_ms, n->midi_note);
+        printf("%-4s %-12s %-10s %-8s %-5s\n", "#", "Notes", "Freq", "Dur", "MIDI");
+        printf("--------------------------------------------------\n");
+
+        int i = 1;
+        struct note *n = pool_first_note(pool);
+        while (n) {
+            if (n->chord_size == 1 && n->note_name[0] == NOTE_REST) {
+                printf("%-4d %-12s %-10s %-8u %-5s\n", i, "rest", "-", n->duration_ms, "-");
+            } else {
+                char notes_str[32] = "";
+                char freq_str[16] = "";
+                char midi_str[16] = "";
+
+                for (uint8_t j = 0; j < n->chord_size && j < ABC_MAX_CHORD_NOTES; j++) {
+                    char note_buf[8];
+                    snprintf(note_buf, sizeof(note_buf), "%s%s%u",
+                             note_name_to_string((NoteName)n->note_name[j]),
+                             accidental_to_string(n->accidental[j]),
+                             n->octave[j]);
+                    if (j > 0) strcat(notes_str, "+");
+                    strcat(notes_str, note_buf);
+                }
+
+                snprintf(freq_str, sizeof(freq_str), "%.1f", n->frequency_x10[0] / 10.0f);
+                snprintf(midi_str, sizeof(midi_str), "%u", n->midi_note[0]);
+
+                printf("%-4d %-12s %-10s %-8u %-5s\n", i, notes_str, freq_str, n->duration_ms, midi_str);
+            }
+            n = note_next(pool, n);
+            i++;
         }
-        n = note_next(sheet, n);
-        i++;
     }
-    printf("==============================================\n");
+    printf("==================================================\n");
 }

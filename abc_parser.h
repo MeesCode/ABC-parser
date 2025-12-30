@@ -8,7 +8,7 @@
 // ============================================================================
 
 #ifndef ABC_MAX_NOTES
-#define ABC_MAX_NOTES 128          // Maximum notes in a sheet
+#define ABC_MAX_NOTES 128          // Maximum notes per voice
 #endif
 
 #ifndef ABC_MAX_TITLE_LEN
@@ -21,6 +21,18 @@
 
 #ifndef ABC_MAX_KEY_LEN
 #define ABC_MAX_KEY_LEN 8          // Maximum key string length
+#endif
+
+#ifndef ABC_MAX_CHORD_NOTES
+#define ABC_MAX_CHORD_NOTES 4      // Maximum notes in a chord
+#endif
+
+#ifndef ABC_MAX_VOICES
+#define ABC_MAX_VOICES 2           // Maximum number of voices (increase if needed)
+#endif
+
+#ifndef ABC_MAX_VOICE_ID_LEN
+#define ABC_MAX_VOICE_ID_LEN 16    // Maximum voice ID length
 #endif
 
 // ============================================================================
@@ -47,33 +59,39 @@ typedef enum {
 #define ACC_NATURAL       2  // Explicit natural, cancels key sig
 #define ACC_DOUBLE_SHARP  3
 
-// Note structure - optimized for minimal memory
+// Note structure - supports chords (multiple pitches with same duration)
 // Uses index-based linking instead of pointers for relocatable memory
 struct note {
-    int16_t next_index;     // Index of next note (-1 = end of list)
-    uint16_t duration_ms;   // Duration in milliseconds (max ~65 seconds)
-    uint16_t frequency_x10; // Frequency * 10 in Hz (e.g., 4400 = 440.0 Hz)
-    uint8_t midi_note;      // MIDI note number (0-127)
-    uint8_t note_name : 4;  // NoteName (0-7)
-    uint8_t octave : 4;     // Octave (0-6)
-    int8_t accidental;      // Accidental (-2 to +3)
+    int16_t next_index;         // Index of next note (-1 = end of list)
+    uint16_t duration_ms;       // Duration in milliseconds (max ~65 seconds)
+    uint8_t chord_size;         // Number of notes in chord (1 = single note)
+
+    // Arrays for chord support (index 0 is primary note, rest are chord tones)
+    uint16_t frequency_x10[ABC_MAX_CHORD_NOTES];  // Frequency * 10 in Hz
+    uint8_t midi_note[ABC_MAX_CHORD_NOTES];       // MIDI note numbers (0-127)
+    uint8_t note_name[ABC_MAX_CHORD_NOTES];       // NoteName values
+    uint8_t octave[ABC_MAX_CHORD_NOTES];          // Octaves
+    int8_t accidental[ABC_MAX_CHORD_NOTES];       // Accidentals
 };
 
-// Pre-allocated note pool
+// Pre-allocated note pool (one per voice)
 typedef struct {
     struct note notes[ABC_MAX_NOTES];
+    char voice_id[ABC_MAX_VOICE_ID_LEN];  // Voice identifier (e.g., "SINE", "SQUARE")
+    int16_t head_index;     // Index of first note (-1 = empty)
+    int16_t tail_index;     // Index of last note (-1 = empty)
     uint16_t count;         // Number of notes currently in use
     uint16_t capacity;      // Always ABC_MAX_NOTES
+    uint32_t total_duration_ms; // Total duration for this voice
 } NotePool;
 
 // Sheet structure - contains the parsed music (all statically allocated)
 struct sheet {
-    NotePool *note_pool;    // Pointer to external note pool
-    int16_t head_index;     // Index of first note (-1 = empty)
-    int16_t tail_index;     // Index of last note (-1 = empty)
-    uint16_t note_count;    // Number of notes in this sheet
-    uint16_t tempo_bpm;     // Q: field (beats per minute)
-    uint32_t total_duration_ms; // Total duration of the sheet
+    NotePool *pools;            // Pointer to array of note pools (one per voice)
+    uint8_t pool_count;         // Number of pools provided
+    uint8_t voice_count;        // Number of voices actually used
+
+    uint16_t tempo_bpm;         // Q: field (beats per minute)
 
     // Metadata from ABC header (statically allocated)
     char title[ABC_MAX_TITLE_LEN];
@@ -96,7 +114,7 @@ extern const uint16_t frequencies_x10[12][7];
 // Memory Pool Functions
 // ============================================================================
 
-// Initialize a note pool (call once at startup)
+// Initialize a note pool (call once at startup for each pool)
 void note_pool_init(NotePool *pool);
 
 // Reset pool (reuse memory for new parse)
@@ -109,8 +127,9 @@ int note_pool_available(const NotePool *pool);
 // Parser Functions
 // ============================================================================
 
-// Initialize a sheet structure (call before parsing)
-void sheet_init(struct sheet *sheet, NotePool *pool);
+// Initialize a sheet structure with an array of note pools
+// pool_count should be ABC_MAX_VOICES (or at least 1)
+void sheet_init(struct sheet *sheet, NotePool *pools, uint8_t pool_count);
 
 // Parse ABC notation into pre-allocated sheet
 // Returns 0 on success, negative on error
@@ -118,7 +137,7 @@ void sheet_init(struct sheet *sheet, NotePool *pool);
 //   -2: Note pool exhausted
 int abc_parse(struct sheet *sheet, const char *abc_string);
 
-// Reset sheet for reuse (also resets the note pool)
+// Reset sheet for reuse (also resets all note pools)
 void sheet_reset(struct sheet *sheet);
 
 // Print the parsed sheet (for debugging)
@@ -128,14 +147,17 @@ void sheet_print(const struct sheet *sheet);
 // Note Access Functions
 // ============================================================================
 
-// Get note by index from pool (NULL if invalid)
-struct note *note_get(const struct sheet *sheet, int index);
+// Get note by index from a specific pool (NULL if invalid)
+struct note *note_get(const NotePool *pool, int index);
 
-// Get first note in sheet (NULL if empty)
+// Get first note in a pool (NULL if empty)
+struct note *pool_first_note(const NotePool *pool);
+
+// Get next note after given note in a pool (NULL if end)
+struct note *note_next(const NotePool *pool, const struct note *current);
+
+// Legacy functions for single-voice compatibility (uses first pool)
 struct note *sheet_first_note(const struct sheet *sheet);
-
-// Get next note after given note (NULL if end)
-struct note *note_next(const struct sheet *sheet, const struct note *current);
 
 // ============================================================================
 // Utility Functions
