@@ -79,6 +79,8 @@ typedef struct {
     uint8_t default_den;
     uint8_t meter_num;
     uint8_t meter_den;
+    uint8_t tempo_note_num;
+    uint8_t tempo_note_den;
     int8_t key_accidentals[7];
     int8_t bar_accidentals[7];
     int16_t repeat_start_index;
@@ -185,6 +187,8 @@ void sheet_init(struct sheet *sheet, NotePool *pool) {
     sheet->tail_index = -1;
     sheet->note_count = 0;
     sheet->tempo_bpm = 120;
+    sheet->tempo_note_num = 1;
+    sheet->tempo_note_den = 4;  // Default: quarter note = BPM
     sheet->total_duration_ms = 0;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
@@ -203,6 +207,8 @@ void sheet_reset(struct sheet *sheet) {
     sheet->note_count = 0;
     sheet->total_duration_ms = 0;
     sheet->tempo_bpm = 120;
+    sheet->tempo_note_num = 1;
+    sheet->tempo_note_den = 4;  // Default: quarter note = BPM
     sheet->default_note_num = 1;
     sheet->default_note_den = 8;
     sheet->meter_num = 4;
@@ -276,8 +282,12 @@ static void skip_whitespace(ParserState *s) {
 }
 
 static uint16_t calculate_duration_ms(ParserState *s, int num, int den) {
-    uint32_t quarter_ms = 60000 / s->tempo_bpm;
-    uint32_t default_ms = quarter_ms * 4 * s->default_num / s->default_den;
+    // Calculate ms per tempo note (e.g., if Q:1/8=120, tempo_note is 1/8)
+    uint32_t tempo_note_ms = 60000 / s->tempo_bpm;
+    // Convert to ms per whole note: tempo_note_ms * (tempo_note_den / tempo_note_num)
+    uint32_t whole_note_ms = tempo_note_ms * s->tempo_note_den / s->tempo_note_num;
+    // Calculate default note duration
+    uint32_t default_ms = whole_note_ms * s->default_num / s->default_den;
     return (uint16_t)(default_ms * num / den);
 }
 
@@ -354,9 +364,34 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
                 break;
             }
             case 'Q': {
-                int tempo = 0;
-                for (uint8_t i = 0; i < vlen; i++) {
-                    if (val[i] >= '0' && val[i] <= '9') tempo = tempo * 10 + (val[i] - '0');
+                // Q: field formats: "Q:120" or "Q:1/4=120"
+                int tempo = 0, note_num = 0, note_den = 0;
+                uint8_t i = 0;
+                // Look for '=' sign (Q:1/4=120 format)
+                uint8_t eq_pos = 0;
+                for (uint8_t j = 0; j < vlen; j++) {
+                    if (val[j] == '=') { eq_pos = j + 1; break; }
+                }
+                if (eq_pos > 0) {
+                    // Parse note value before '=' (e.g., "1/4")
+                    while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
+                        note_num = note_num * 10 + (val[i++] - '0');
+                    }
+                    if (i < eq_pos - 1 && val[i] == '/') {
+                        i++;
+                        while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
+                            note_den = note_den * 10 + (val[i++] - '0');
+                        }
+                    }
+                    if (note_num > 0 && note_den > 0) {
+                        s->tempo_note_num = sheet->tempo_note_num = (uint8_t)note_num;
+                        s->tempo_note_den = sheet->tempo_note_den = (uint8_t)note_den;
+                    }
+                }
+                // Parse BPM after '=' or from start if no '='
+                i = eq_pos;
+                while (i < vlen && val[i] >= '0' && val[i] <= '9') {
+                    tempo = tempo * 10 + (val[i++] - '0');
                 }
                 if (tempo > 0) s->tempo_bpm = sheet->tempo_bpm = (uint16_t)tempo;
                 break;
@@ -535,6 +570,8 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
         .default_num = sheet->default_note_num,
         .default_den = sheet->default_note_den,
         .tempo_bpm = sheet->tempo_bpm,
+        .tempo_note_num = sheet->tempo_note_num,
+        .tempo_note_den = sheet->tempo_note_den,
         .meter_num = sheet->meter_num,
         .meter_den = sheet->meter_den,
         .repeat_start_index = -1,

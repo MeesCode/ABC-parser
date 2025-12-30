@@ -83,6 +83,8 @@ struct sheet {
     uint8_t default_note_den;   // L: denominator (e.g., 8 in 1/8)
     uint8_t meter_num;          // M: numerator (e.g., 4 in 4/4)
     uint8_t meter_den;          // M: denominator (e.g., 4 in 4/4)
+    uint8_t tempo_note_num;     // Q: note numerator (e.g., 1 in Q:1/4=120)
+    uint8_t tempo_note_den;     // Q: note denominator (e.g., 4 in Q:1/4=120)
 };
 
 // Frequency lookup table [semitone][octave] stored as freq * 10

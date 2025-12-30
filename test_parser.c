@@ -391,6 +391,30 @@ TEST(header_tempo) {
     return 1;
 }
 
+TEST(header_tempo_with_note_value) {
+    // Q:1/4=120 means quarter note = 120 BPM
+    int result = abc_parse(&g_sheet, "Q:1/4=120\nL:1/4\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 120);
+    ASSERT_EQ(g_sheet.tempo_note_num, 1);
+    ASSERT_EQ(g_sheet.tempo_note_den, 4);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration_ms, 500);  // 1/4 at Q:1/4=120 = 500ms
+    return 1;
+}
+
+TEST(header_tempo_eighth_note) {
+    // Q:1/8=120 means eighth note = 120 BPM (twice as slow as Q:1/4=120)
+    int result = abc_parse(&g_sheet, "Q:1/8=120\nL:1/4\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 120);
+    ASSERT_EQ(g_sheet.tempo_note_num, 1);
+    ASSERT_EQ(g_sheet.tempo_note_den, 8);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration_ms, 1000);  // 1/4 at Q:1/8=120 = 1000ms (2x slower)
+    return 1;
+}
+
 TEST(header_meter) {
     int result = abc_parse(&g_sheet, "M:3/4\nK:C\nC");
     ASSERT_EQ(result, 0);
@@ -676,6 +700,8 @@ int main(void) {
     RUN_TEST(header_title);
     RUN_TEST(header_composer);
     RUN_TEST(header_tempo);
+    RUN_TEST(header_tempo_with_note_value);
+    RUN_TEST(header_tempo_eighth_note);
     RUN_TEST(header_meter);
     RUN_TEST(header_default_length);
     RUN_TEST(header_key);
