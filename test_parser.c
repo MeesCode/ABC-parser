@@ -11,7 +11,7 @@ static struct sheet g_sheet;
 
 // Convenience macro to get note count from first pool
 #define NOTE_COUNT() (g_pools[0].count)
-#define TOTAL_DURATION() (g_pools[0].total_duration_ms)
+#define TOTAL_TICKS() (g_pools[0].total_ticks)
 
 #define TEST(name) static int test_##name(void)
 #define RUN_TEST(name) do { \
@@ -228,7 +228,7 @@ TEST(duration_default) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 250);  // 1/8 at 120 BPM = 250ms
+    ASSERT_EQ(n->duration, 24);  // 1/8 = 24 ticks (PPQ=48)
     return 1;
 }
 
@@ -236,7 +236,7 @@ TEST(duration_double) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC2");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 500);
+    ASSERT_EQ(n->duration, 48);  // 24 * 2 = 48 ticks
     return 1;
 }
 
@@ -244,7 +244,7 @@ TEST(duration_quadruple) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC4");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 1000);
+    ASSERT_EQ(n->duration, 96);  // 24 * 4 = 96 ticks
     return 1;
 }
 
@@ -252,7 +252,7 @@ TEST(duration_half) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC/2");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 125);
+    ASSERT_EQ(n->duration, 12);  // 24 / 2 = 12 ticks
     return 1;
 }
 
@@ -261,7 +261,7 @@ TEST(duration_slash_only) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC/");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 125);
+    ASSERT_EQ(n->duration, 12);  // 24 / 2 = 12 ticks
     return 1;
 }
 
@@ -270,7 +270,7 @@ TEST(duration_double_slash) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC//");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 62);  // 250/4 = 62.5, truncated
+    ASSERT_EQ(n->duration, 6);  // 24 / 4 = 6 ticks
     return 1;
 }
 
@@ -279,7 +279,7 @@ TEST(duration_dotted) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC3/2");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 375);  // 250 * 1.5
+    ASSERT_EQ(n->duration, 36);  // 24 * 3/2 = 36 ticks
     return 1;
 }
 
@@ -289,40 +289,40 @@ TEST(duration_dotted) {
 
 TEST(triplet) {
     // (3CDE = triplet: 3 notes in time of 2
-    // At L:1/8, Q:120, normal eighth = 250ms, triplet = 250*2/3 = 166ms
+    // At L:1/8, normal eighth = 24 ticks, triplet = 24*2/3 = 16 ticks
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(3CDE");
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 3);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 166);  // 250 * 2/3
+    ASSERT_EQ(n->duration, 16);  // 24 * 2/3 = 16 ticks
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->duration_ms, 166);
+    ASSERT_EQ(n->duration, 16);
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->duration_ms, 166);
+    ASSERT_EQ(n->duration, 16);
     return 1;
 }
 
 TEST(duplet) {
     // (2CD = duplet: 2 notes in time of 3
-    // At L:1/8, Q:120, normal eighth = 250ms, duplet = 250*3/2 = 375ms
+    // At L:1/8, normal eighth = 24 ticks, duplet = 24*3/2 = 36 ticks
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(2CD");
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 2);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 375);  // 250 * 3/2
+    ASSERT_EQ(n->duration, 36);  // 24 * 3/2 = 36 ticks
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->duration_ms, 375);
+    ASSERT_EQ(n->duration, 36);
     return 1;
 }
 
 TEST(quadruplet) {
     // (4CDEF = quadruplet: 4 notes in time of 3
-    // At L:1/8, Q:120, normal eighth = 250ms, quadruplet = 250*3/4 = 187ms
+    // At L:1/8, normal eighth = 24 ticks, quadruplet = 24*3/4 = 18 ticks
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\n(4CDEF");
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 4);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 187);  // 250 * 3/4
+    ASSERT_EQ(n->duration, 18);  // 24 * 3/4 = 18 ticks
     return 1;
 }
 
@@ -332,13 +332,13 @@ TEST(tuplet_followed_by_normal) {
     ASSERT_EQ(result, 0);
     ASSERT_EQ(NOTE_COUNT(), 4);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 166);  // triplet
+    ASSERT_EQ(n->duration, 16);  // triplet
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->duration_ms, 166);  // triplet
+    ASSERT_EQ(n->duration, 16);  // triplet
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->duration_ms, 166);  // triplet
+    ASSERT_EQ(n->duration, 16);  // triplet
     n = note_next(&g_pools[0], n);
-    ASSERT_EQ(n->duration_ms, 250);  // normal
+    ASSERT_EQ(n->duration, 24);  // normal
     return 1;
 }
 
@@ -369,7 +369,7 @@ TEST(rest_with_duration) {
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
     ASSERT(midi_is_rest(n->midi_note[0]));
-    ASSERT_EQ(n->duration_ms, 500);
+    ASSERT_EQ(n->duration, 48);  // 24 * 2 = 48 ticks
     return 1;
 }
 
@@ -460,7 +460,7 @@ TEST(header_tempo) {
     ASSERT_EQ(result, 0);
     ASSERT_EQ(g_sheet.tempo_bpm, 60);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 1000);  // 1/4 at 60 BPM = 1000ms
+    ASSERT_EQ(n->duration, 48);  // 1/4 = 48 ticks (tempo doesn't affect ticks)
     return 1;
 }
 
@@ -472,19 +472,21 @@ TEST(header_tempo_with_note_value) {
     ASSERT_EQ(g_sheet.tempo_note_num, 1);
     ASSERT_EQ(g_sheet.tempo_note_den, 4);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 500);  // 1/4 at Q:1/4=120 = 500ms
+    ASSERT_EQ(n->duration, 48);  // 1/4 = 48 ticks
     return 1;
 }
 
 TEST(header_tempo_eighth_note) {
-    // Q:1/8=120 means eighth note = 120 BPM (twice as slow as Q:1/4=120)
+    // Q:1/8=120 means eighth note = 120 BPM
+    // Ticks are tempo-independent: L:1/4 = 48 ticks always
+    // tempo_note only affects ticks_to_ms conversion
     int result = abc_parse(&g_sheet, "Q:1/8=120\nL:1/4\nK:C\nC");
     ASSERT_EQ(result, 0);
     ASSERT_EQ(g_sheet.tempo_bpm, 120);
     ASSERT_EQ(g_sheet.tempo_note_num, 1);
     ASSERT_EQ(g_sheet.tempo_note_den, 8);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 1000);  // 1/4 at Q:1/8=120 = 1000ms (2x slower)
+    ASSERT_EQ(n->duration, 48);  // 1/4 = 48 ticks (tempo-independent)
     return 1;
 }
 
@@ -502,7 +504,7 @@ TEST(header_default_length) {
     ASSERT_EQ(g_sheet.default_note_num, 1);
     ASSERT_EQ(g_sheet.default_note_den, 4);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 500);  // 1/4 at 120 BPM = 500ms
+    ASSERT_EQ(n->duration, 48);  // 1/4 = 48 ticks
     return 1;
 }
 
@@ -708,8 +710,8 @@ TEST(greensleeves_excerpt) {
 TEST(total_duration) {
     int result = abc_parse(&g_sheet, "L:1/4\nQ:120\nK:C\nC D E F");
     ASSERT_EQ(result, 0);
-    // 4 quarter notes at 120 BPM = 4 * 500ms = 2000ms
-    ASSERT_EQ(TOTAL_DURATION(), 2000);
+    // 4 quarter notes = 4 * 48 ticks = 192 ticks
+    ASSERT_EQ(TOTAL_TICKS(), 192);
     return 1;
 }
 
@@ -756,7 +758,7 @@ TEST(chord_with_duration) {
     int result = abc_parse(&g_sheet, "L:1/8\nK:C\n[CEG]2");
     ASSERT_EQ(result, 0);
     struct note *n = sheet_first_note(&g_sheet);
-    ASSERT_EQ(n->duration_ms, 500);  // 250 * 2
+    ASSERT_EQ(n->duration, 48);  // 24 * 2 = 48 ticks
     return 1;
 }
 

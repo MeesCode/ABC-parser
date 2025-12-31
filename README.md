@@ -22,14 +22,14 @@ With default settings (2 voices, 128 notes per voice, 4 notes per chord):
 
 | Component | Size |
 |-----------|------|
-| Note struct | 10 bytes |
+| Note struct | 8 bytes |
 | Sheet struct | 96 bytes |
-| Note pool (128 notes) | 1,308 bytes |
-| **Total (2 voice pools)** | **~2.7 KB** |
+| Note pool (128 notes) | 1,052 bytes |
+| **Total (2 voice pools)** | **~2.2 KB** |
 
-For single-voice applications with `ABC_MAX_VOICES=1`: **~1.4 KB**
+For single-voice applications with `ABC_MAX_VOICES=1`: **~1.1 KB**
 
-Notes store only MIDI note numbers; frequency, note name, and octave are computed on demand via API functions.
+Notes store only MIDI note numbers and duration in MIDI ticks (PPQ=48). Frequency, note name, and octave are computed on demand via API functions.
 
 ## Building
 
@@ -77,7 +77,8 @@ int main(void) {
     while (n) {
         uint8_t midi = n->midi_note[0];                      // MIDI note number
         float freq = midi_to_frequency_x10(midi) / 10.0f;    // Hz (computed from MIDI)
-        uint16_t dur = n->duration_ms;                       // milliseconds
+        uint8_t ticks = n->duration;                         // Duration in MIDI ticks
+        uint16_t ms = ticks_to_ms(ticks, g_sheet.tempo_bpm); // Convert to milliseconds
 
         // Use for synthesis...
 
@@ -201,6 +202,7 @@ Adjust limits in `abc_parser.h` or via compile flags:
 #define ABC_MAX_COMPOSER_LEN 32  // Composer string buffer
 #define ABC_MAX_KEY_LEN       8  // Key string buffer
 #define ABC_MAX_VOICE_ID_LEN 16  // Voice ID string buffer
+#define ABC_PPQ              48  // Pulses per quarter note (MIDI ticks)
 ```
 
 Or compile with:
@@ -216,13 +218,13 @@ gcc -DABC_MAX_NOTES=256 -DABC_MAX_VOICES=4 -o abcparser main.c abc_parser.c
 ```c
 struct note {
     int16_t next_index;                         // Index of next note (-1 = end)
-    uint16_t duration_ms;                       // Duration in milliseconds
+    uint8_t duration;                           // Duration in MIDI ticks (PPQ=48)
     uint8_t chord_size;                         // Number of notes (1 = single note)
     uint8_t midi_note[ABC_MAX_CHORD_NOTES];     // MIDI note numbers (0-127, 0 = rest)
 };
 ```
 
-Note properties (frequency, note name, octave) are computed on demand from MIDI values using the utility functions.
+Note properties (frequency, note name, octave) are computed on demand from MIDI values using the utility functions. Duration is stored as tempo-independent MIDI ticks; use `ticks_to_ms()` to convert to milliseconds.
 
 ### Note Pool Structure
 
@@ -234,7 +236,7 @@ typedef struct {
     int16_t tail_index;                    // Last note index
     uint16_t count;                        // Notes in use
     uint16_t capacity;                     // Always ABC_MAX_NOTES
-    uint32_t total_duration_ms;            // Total duration for this voice
+    uint32_t total_ticks;                  // Total duration in MIDI ticks
 } NotePool;
 ```
 
@@ -271,6 +273,13 @@ uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10 in Hz
 NoteName midi_to_note_name(uint8_t midi);       // Returns note name (C, D, E, etc.)
 uint8_t midi_to_octave(uint8_t midi);           // Returns octave (0-10)
 int midi_is_rest(uint8_t midi);                 // Returns 1 if rest (midi == 0)
+```
+
+### Duration Conversion
+
+```c
+uint16_t ticks_to_ms(uint8_t ticks, uint16_t bpm);       // Convert ticks to milliseconds
+uint32_t pool_total_ms(const NotePool *pool, uint16_t bpm); // Total pool duration in ms
 ```
 
 ### Other Utilities

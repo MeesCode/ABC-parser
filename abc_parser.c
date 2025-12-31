@@ -3,23 +3,33 @@
 #include <string.h>
 
 // ============================================================================
-// Frequency lookup table (frequency * 10, stored as uint16_t)
+// Frequency lookup table indexed by MIDI note (frequency * 10, stored as uint16_t)
 // ============================================================================
 
-// Octaves 0-6, where octave 4 contains A440
-const uint16_t frequencies_x10[12][7] = {
-    {  164,   327,   654,  1308,  2616,  5233, 10465 }, // C
-    {  173,   347,   693,  1386,  2772,  5544, 11087 }, // C#/Db
-    {  184,   367,   734,  1468,  2937,  5873, 11747 }, // D
-    {  195,   389,   778,  1556,  3111,  6223, 12445 }, // D#/Eb
-    {  206,   412,   824,  1648,  3296,  6593, 13185 }, // E
-    {  218,   437,   873,  1746,  3492,  6985, 13969 }, // F
-    {  231,   463,   925,  1850,  3700,  7400, 14800 }, // F#/Gb
-    {  245,   490,   980,  1960,  3920,  7840, 15680 }, // G
-    {  260,   519,  1038,  2077,  4153,  8306, 16612 }, // G#/Ab
-    {  275,   550,  1100,  2200,  4400,  8800, 17600 }, // A
-    {  291,   583,  1165,  2331,  4662,  9323, 18647 }, // A#/Bb
-    {  309,   617,  1235,  2469,  4939,  9878, 19756 }, // B
+// Direct MIDI note to frequency*10 lookup for O(1) access
+// MIDI 0 = rest, MIDI 12-95 = C0-B6, values outside usable range are 0 or clamped
+const uint16_t midi_frequencies_x10[128] = {
+    // MIDI 0-11: Below C0, not typically used (0 = rest)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    // MIDI 12-23: Octave 0 (C0-B0)
+    164, 173, 184, 195, 206, 218, 231, 245, 260, 275, 291, 309,
+    // MIDI 24-35: Octave 1 (C1-B1)
+    327, 347, 367, 389, 412, 437, 463, 490, 519, 550, 583, 617,
+    // MIDI 36-47: Octave 2 (C2-B2)
+    654, 693, 734, 778, 824, 873, 925, 980, 1038, 1100, 1165, 1235,
+    // MIDI 48-59: Octave 3 (C3-B3)
+    1308, 1386, 1468, 1556, 1648, 1746, 1850, 1960, 2077, 2200, 2331, 2469,
+    // MIDI 60-71: Octave 4 (C4-B4) - Middle C is MIDI 60
+    2616, 2772, 2937, 3111, 3296, 3492, 3700, 3920, 4153, 4400, 4662, 4939,
+    // MIDI 72-83: Octave 5 (C5-B5)
+    5233, 5544, 5873, 6223, 6593, 6985, 7400, 7840, 8306, 8800, 9323, 9878,
+    // MIDI 84-95: Octave 6 (C6-B6)
+    10465, 11087, 11747, 12445, 13185, 13969, 14800, 15680, 16612, 17600, 18647, 19756,
+    // MIDI 96-127: Above B6, clamp to highest values (repeat B6 freq)
+    19756, 19756, 19756, 19756, 19756, 19756, 19756, 19756,
+    19756, 19756, 19756, 19756, 19756, 19756, 19756, 19756,
+    19756, 19756, 19756, 19756, 19756, 19756, 19756, 19756,
+    19756, 19756, 19756, 19756, 19756, 19756, 19756, 19756
 };
 
 // Map note names to semitone offsets from C
@@ -98,30 +108,8 @@ typedef struct {
 
 float note_to_frequency(NoteName name, int octave, int8_t acc) {
     if (name == NOTE_REST) return 0.0f;
-
-    int semitone = note_to_semitone[name] + acc;
-    if (acc == ACC_NATURAL) semitone = note_to_semitone[name];
-
-    while (semitone < 0) { semitone += 12; octave--; }
-    while (semitone >= 12) { semitone -= 12; octave++; }
-    if (octave < 0) octave = 0;
-    if (octave > 6) octave = 6;
-
-    return frequencies_x10[semitone][octave] / 10.0f;
-}
-
-static uint16_t note_to_frequency_x10(NoteName name, int octave, int8_t acc) {
-    if (name == NOTE_REST) return 0;
-
-    int semitone = note_to_semitone[name] + acc;
-    if (acc == ACC_NATURAL) semitone = note_to_semitone[name];
-
-    while (semitone < 0) { semitone += 12; octave--; }
-    while (semitone >= 12) { semitone -= 12; octave++; }
-    if (octave < 0) octave = 0;
-    if (octave > 6) octave = 6;
-
-    return frequencies_x10[semitone][octave];
+    int midi = note_to_midi(name, octave, acc);
+    return midi_frequencies_x10[midi] / 10.0f;
 }
 
 int note_to_midi(NoteName name, int octave, int8_t acc) {
@@ -134,15 +122,9 @@ int note_to_midi(NoteName name, int octave, int8_t acc) {
     return 12 + (octave * 12) + semitone;
 }
 
-// MIDI to frequency lookup - extended to cover MIDI 0-127
-// Uses the frequencies_x10 table for octaves 0-6, computes for higher
+// MIDI to frequency lookup - direct table access O(1)
 uint16_t midi_to_frequency_x10(uint8_t midi) {
-    if (midi == 0) return 0;  // Rest
-    int semitone = midi % 12;
-    int octave = (midi / 12) - 1;
-    if (octave < 0) octave = 0;
-    if (octave > 6) return frequencies_x10[semitone][6];  // Clamp high notes
-    return frequencies_x10[semitone][octave];
+    return midi_frequencies_x10[midi];
 }
 
 // Map semitone (0-11) to NoteName
@@ -163,6 +145,18 @@ uint8_t midi_to_octave(uint8_t midi) {
 
 int midi_is_rest(uint8_t midi) {
     return midi == 0;
+}
+
+// Convert MIDI ticks to milliseconds: ms = ticks * 60000 / (bpm * PPQ)
+uint16_t ticks_to_ms(uint8_t ticks, uint16_t bpm) {
+    if (bpm == 0) bpm = 120;  // Default BPM
+    return (uint16_t)((uint32_t)ticks * 60000 / ((uint32_t)bpm * ABC_PPQ));
+}
+
+// Get total duration in milliseconds for a pool
+uint32_t pool_total_ms(const NotePool *pool, uint16_t bpm) {
+    if (!pool || bpm == 0) return 0;
+    return (uint32_t)pool->total_ticks * 60000 / ((uint32_t)bpm * ABC_PPQ);
 }
 
 const char *note_name_to_string(NoteName name) {
@@ -191,7 +185,7 @@ void note_pool_init(NotePool *pool) {
     pool->capacity = ABC_MAX_NOTES;
     pool->head_index = -1;
     pool->tail_index = -1;
-    pool->total_duration_ms = 0;
+    pool->total_ticks = 0;
     pool->voice_id[0] = '\0';
 }
 
@@ -200,7 +194,7 @@ void note_pool_reset(NotePool *pool) {
     pool->count = 0;
     pool->head_index = -1;
     pool->tail_index = -1;
-    pool->total_duration_ms = 0;
+    pool->total_ticks = 0;
     pool->voice_id[0] = '\0';
 }
 
@@ -214,7 +208,7 @@ static int16_t note_pool_alloc(NotePool *pool) {
     pool->count++;
     struct note *n = &pool->notes[index];
     n->next_index = -1;
-    n->duration_ms = 0;
+    n->duration = 0;
     n->chord_size = 0;
     for (int i = 0; i < ABC_MAX_CHORD_NOTES; i++) {
         n->midi_note[i] = 0;
@@ -289,7 +283,7 @@ struct note *sheet_first_note(const struct sheet *sheet) {
 // Append a note/chord to a specific pool (stores only MIDI notes)
 static int pool_append_note(NotePool *pool, uint8_t chord_size,
                             NoteName *names, int *octaves,
-                            int8_t *accs, uint16_t duration_ms) {
+                            int8_t *accs, uint8_t duration_ticks) {
     if (!pool) return -1;
 
     int16_t index = note_pool_alloc(pool);
@@ -297,7 +291,7 @@ static int pool_append_note(NotePool *pool, uint8_t chord_size,
 
     struct note *n = &pool->notes[index];
     n->chord_size = chord_size;
-    n->duration_ms = duration_ms;
+    n->duration = duration_ticks;
     n->next_index = -1;
 
     for (uint8_t i = 0; i < chord_size && i < ABC_MAX_CHORD_NOTES; i++) {
@@ -313,7 +307,7 @@ static int pool_append_note(NotePool *pool, uint8_t chord_size,
         pool->tail_index = index;
     }
 
-    pool->total_duration_ms += duration_ms;
+    pool->total_ticks += duration_ticks;
     return 0;
 }
 
@@ -337,18 +331,25 @@ static void skip_whitespace(ParserState *s) {
     }
 }
 
-static uint16_t calculate_duration_ms(ParserState *s, int num, int den) {
-    uint32_t tempo_note_ms = 60000 / s->tempo_bpm;
-    uint32_t whole_note_ms = tempo_note_ms * s->tempo_note_den / s->tempo_note_num;
-    uint32_t default_ms = whole_note_ms * s->default_num / s->default_den;
-    uint32_t duration = default_ms * num / den;
+// Calculate duration in MIDI ticks (PPQ-based)
+// Quarter note = ABC_PPQ ticks, so whole note = 4 * ABC_PPQ ticks
+static uint8_t calculate_duration_ticks(ParserState *s, int num, int den) {
+    // Whole note = 4 * PPQ ticks (PPQ = ticks per quarter note)
+    // Ticks are tempo-independent; tempo_note only affects ticks_to_ms conversion
+    uint32_t whole_ticks = 4 * ABC_PPQ;
+    // Default note duration in ticks
+    uint32_t default_ticks = whole_ticks * s->default_num / s->default_den;
+    // Apply note multiplier/divisor
+    uint32_t duration = default_ticks * num / den;
 
     if (s->tuplet_remaining > 0) {
         duration = duration * s->tuplet_in_time / s->tuplet_num;
         s->tuplet_remaining--;
     }
 
-    return (uint16_t)duration;
+    // Clamp to uint8_t max (255)
+    if (duration > 255) duration = 255;
+    return (uint8_t)duration;
 }
 
 static void set_key_signature(ParserState *s, const char *key) {
@@ -626,7 +627,7 @@ static int parse_note_or_chord(ParserState *s, struct sheet *sheet) {
         }
 
         if (chord_size > 0) {
-            uint16_t duration = calculate_duration_ms(s, total_dur_num, total_dur_den);
+            uint8_t duration = calculate_duration_ticks(s, total_dur_num, total_dur_den);
             return pool_append_note(pool, chord_size, names, octaves, accs, duration);
         }
         return 0;
@@ -638,7 +639,7 @@ static int parse_note_or_chord(ParserState *s, struct sheet *sheet) {
         NoteName names[1] = { pitch.name };
         int octaves[1] = { pitch.octave };
         int8_t accs[1] = { pitch.accidental };
-        uint16_t duration = calculate_duration_ms(s, pitch.dur_num, pitch.dur_den);
+        uint8_t duration = calculate_duration_ticks(s, pitch.dur_num, pitch.dur_den);
         return pool_append_note(pool, 1, names, octaves, accs, duration);
     }
 
@@ -663,7 +664,7 @@ static int copy_repeat_section(NotePool *pool, int16_t start_idx, int16_t end_id
             accs[i] = ACC_NONE;  // Accidentals not preserved in repeat copies
         }
 
-        if (pool_append_note(pool, src->chord_size, names, octaves, accs, src->duration_ms) < 0) {
+        if (pool_append_note(pool, src->chord_size, names, octaves, accs, src->duration) < 0) {
             return -1;
         }
         cur = src->next_index;
@@ -838,25 +839,26 @@ void sheet_print(const struct sheet *sheet) {
     if (sheet->title[0]) printf("Title: %s\n", sheet->title);
     if (sheet->composer[0]) printf("Composer: %s\n", sheet->composer);
     if (sheet->key[0]) printf("Key: %s\n", sheet->key);
-    printf("Tempo: %u BPM\n", sheet->tempo_bpm);
+    printf("Tempo: %u BPM (PPQ=%u)\n", sheet->tempo_bpm, ABC_PPQ);
     printf("Meter: %u/%u\n", sheet->meter_num, sheet->meter_den);
     printf("Default note: %u/%u\n", sheet->default_note_num, sheet->default_note_den);
     printf("Voices: %u\n", sheet->voice_count);
 
     for (uint8_t v = 0; v < sheet->voice_count; v++) {
         NotePool *pool = &sheet->pools[v];
+        uint32_t total_ms = pool_total_ms(pool, sheet->tempo_bpm);
         printf("\n--- Voice %u: %s ---\n", v + 1, pool->voice_id[0] ? pool->voice_id : "(unnamed)");
-        printf("Notes: %u, Duration: %lu ms (%.2f s)\n",
-               pool->count, (unsigned long)pool->total_duration_ms, pool->total_duration_ms / 1000.0f);
+        printf("Notes: %u, Duration: %lu ticks (%lu ms, %.2f s)\n",
+               pool->count, (unsigned long)pool->total_ticks, (unsigned long)total_ms, total_ms / 1000.0f);
 
-        printf("%-4s %-12s %-10s %-8s %-5s\n", "#", "Notes", "Freq", "Dur", "MIDI");
+        printf("%-4s %-12s %-10s %-8s %-5s\n", "#", "Notes", "Freq", "Ticks", "MIDI");
         printf("--------------------------------------------------\n");
 
         int i = 1;
         struct note *n = pool_first_note(pool);
         while (n) {
             if (n->chord_size == 1 && midi_is_rest(n->midi_note[0])) {
-                printf("%-4d %-12s %-10s %-8u %-5s\n", i, "rest", "-", n->duration_ms, "-");
+                printf("%-4d %-12s %-10s %-8u %-5s\n", i, "rest", "-", n->duration, "-");
             } else {
                 char notes_str[32] = "";
                 char freq_str[16] = "";
@@ -874,7 +876,7 @@ void sheet_print(const struct sheet *sheet) {
                 snprintf(freq_str, sizeof(freq_str), "%.1f", midi_to_frequency_x10(n->midi_note[0]) / 10.0f);
                 snprintf(midi_str, sizeof(midi_str), "%u", n->midi_note[0]);
 
-                printf("%-4d %-12s %-10s %-8u %-5s\n", i, notes_str, freq_str, n->duration_ms, midi_str);
+                printf("%-4d %-12s %-10s %-8u %-5s\n", i, notes_str, freq_str, n->duration, midi_str);
             }
             n = note_next(pool, n);
             i++;

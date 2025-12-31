@@ -63,15 +63,16 @@ int main(void) {
         printf("\n--- Voice %u: %s ---\n", v + 1, pool->voice_id);
         struct note *n = pool_first_note(pool);
         for (int i = 0; n && i < 100; i++) {
+            uint16_t ms = ticks_to_ms(n->duration, g_sheet.tempo_bpm);
             if (n->chord_size == 1 && midi_is_rest(n->midi_note[0])) {
-                printf("  %d: REST %u ms\n", i + 1, n->duration_ms);
+                printf("  %d: REST %u ticks (%u ms)\n", i + 1, n->duration, ms);
             } else if (n->chord_size == 1) {
-                printf("  %d: %s%u @ %.1f Hz, %u ms\n",
+                printf("  %d: %s%u @ %.1f Hz, %u ticks (%u ms)\n",
                        i + 1,
                        note_name_to_string(midi_to_note_name(n->midi_note[0])),
                        midi_to_octave(n->midi_note[0]),
                        midi_to_frequency_x10(n->midi_note[0]) / 10.0f,
-                       n->duration_ms);
+                       n->duration, ms);
             } else {
                 printf("  %d: [", i + 1);
                 for (uint8_t j = 0; j < n->chord_size; j++) {
@@ -80,7 +81,7 @@ int main(void) {
                            note_name_to_string(midi_to_note_name(n->midi_note[j])),
                            midi_to_octave(n->midi_note[j]));
                 }
-                printf("] @ %.1f Hz, %u ms\n", midi_to_frequency_x10(n->midi_note[0]) / 10.0f, n->duration_ms);
+                printf("] @ %.1f Hz, %u ticks (%u ms)\n", midi_to_frequency_x10(n->midi_note[0]) / 10.0f, n->duration, ms);
             }
             n = note_next(pool, n);
         }

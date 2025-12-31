@@ -35,6 +35,10 @@
 #define ABC_MAX_VOICE_ID_LEN 16    // Maximum voice ID length
 #endif
 
+#ifndef ABC_PPQ
+#define ABC_PPQ 48                 // Pulses per quarter note (MIDI-style timing)
+#endif
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -62,9 +66,10 @@ typedef enum {
 // Note structure - supports chords (multiple pitches with same duration)
 // Uses index-based linking instead of pointers for relocatable memory
 // Only stores MIDI notes - frequency/name/octave computed via API functions
+// Duration stored as MIDI ticks (PPQ=48 means 48 ticks = quarter note)
 struct note {
     int16_t next_index;         // Index of next note (-1 = end of list)
-    uint16_t duration_ms;       // Duration in milliseconds (max ~65 seconds)
+    uint8_t duration;           // Duration in MIDI ticks (PPQ-based, max 255 ticks)
     uint8_t chord_size;         // Number of notes in chord (1 = single note)
     uint8_t midi_note[ABC_MAX_CHORD_NOTES];  // MIDI note numbers (0-127, 0 = rest)
 };
@@ -77,7 +82,7 @@ typedef struct {
     int16_t tail_index;     // Index of last note (-1 = empty)
     uint16_t count;         // Number of notes currently in use
     uint16_t capacity;      // Always ABC_MAX_NOTES
-    uint32_t total_duration_ms; // Total duration for this voice
+    uint32_t total_ticks;   // Total duration in MIDI ticks for this voice
 } NotePool;
 
 // Sheet structure - contains the parsed music (all statically allocated)
@@ -100,10 +105,10 @@ struct sheet {
     uint8_t tempo_note_den;     // Q: note denominator (e.g., 4 in Q:1/4=120)
 };
 
-// Frequency lookup table [semitone][octave] stored as freq * 10
-// semitone: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B
-// octave: 0-6 (octave 4 is middle C)
-extern const uint16_t frequencies_x10[12][7];
+// Frequency lookup table indexed by MIDI note (0-127), stored as freq * 10
+// Index directly with MIDI note number for O(1) lookup
+// Covers MIDI notes 12-95 (C0-B6), values outside range return 0 or clamped
+extern const uint16_t midi_frequencies_x10[128];
 
 // ============================================================================
 // Memory Pool Functions
@@ -163,10 +168,15 @@ float note_to_frequency(NoteName name, int octave, int8_t acc);
 int note_to_midi(NoteName name, int octave, int8_t acc);
 
 // Get note properties from MIDI number (use these to decode stored notes)
-uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10
+uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10 (direct table lookup)
 NoteName midi_to_note_name(uint8_t midi);       // Returns note name (C, D, E, etc.)
 uint8_t midi_to_octave(uint8_t midi);           // Returns octave (0-10)
 int midi_is_rest(uint8_t midi);                 // Returns 1 if rest (midi == 0)
+
+// Duration conversion (MIDI ticks to milliseconds)
+// ticks_to_ms(ticks, bpm) = ticks * 60000 / (bpm * PPQ)
+uint16_t ticks_to_ms(uint8_t ticks, uint16_t bpm);  // Convert ticks to milliseconds
+uint32_t pool_total_ms(const NotePool *pool, uint16_t bpm);  // Total duration in ms
 
 // String conversion helpers
 const char *note_name_to_string(NoteName name);

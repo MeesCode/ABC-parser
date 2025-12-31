@@ -6,7 +6,9 @@
       "Bash(./Debug/test_parser.exe:*)",
       "Bash(./Debug/abcparser.exe:*)",
       "Bash(./test_parser.exe:*)",
-      "Bash(./abcparser.exe)"
+      "Bash(./abcparser.exe)",
+      "Bash(c:/Users/meesb/Documents/git/abcparser/build/Debug/test_parser.exe)",
+      "Bash(c:/Users/meesb/Documents/git/abcparser/build/Debug/abcparser.exe)"
     ]
   }
 }
