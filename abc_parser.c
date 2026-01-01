@@ -479,6 +479,9 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
                 s->pos = end;
                 return;
             }
+            case 'V':
+                // V: marks start of body - don't consume it, let body parser handle it
+                return;
         }
         s->pos = end;
     }

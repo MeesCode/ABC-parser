@@ -796,6 +796,19 @@ TEST(voice_continuation) {
     return 1;
 }
 
+TEST(voice_without_key) {
+    // V: should work without K: field
+    int result = abc_parse(&g_sheet, "V:NOISE\nA4");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.voice_count, 1);
+    ASSERT(strcmp(g_pools[0].voice_id, "NOISE") == 0);
+    ASSERT_EQ(g_pools[0].count, 1);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration, 96);  // A with 4x duration = 24 * 4 = 96 ticks
+    ASSERT_EQ(midi_to_note_name(n->midi_note[0]), NOTE_A);
+    return 1;
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -911,6 +924,7 @@ int main(void) {
     RUN_TEST(single_voice);
     RUN_TEST(two_voices);
     RUN_TEST(voice_continuation);
+    RUN_TEST(voice_without_key);
 
     printf("\n=====================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
