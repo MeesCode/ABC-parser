@@ -8,7 +8,8 @@
       "Bash(./test_parser.exe:*)",
       "Bash(./abcparser.exe)",
       "Bash(c:/Users/meesb/Documents/git/abcparser/build/Debug/test_parser.exe)",
-      "Bash(c:/Users/meesb/Documents/git/abcparser/build/Debug/abcparser.exe)"
+      "Bash(c:/Users/meesb/Documents/git/abcparser/build/Debug/abcparser.exe)",
+      "Bash(cat:*)"
     ]
   }
 }

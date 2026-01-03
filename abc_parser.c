@@ -781,9 +781,9 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             continue;
         }
 
-        // Skip decorations
+        // Skip decorations (staccato dots, ties, slurs, etc.)
         if (c == ')' || c == '{' || c == '}' || c == '!' || c == '+' ||
-            c == '-' || c == '<' || c == '>' || c == '~' || c == '%') {
+            c == '-' || c == '<' || c == '>' || c == '~' || c == '%' || c == '.') {
             advance(s);
             continue;
         }

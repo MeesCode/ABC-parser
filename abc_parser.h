@@ -8,7 +8,7 @@
 // ============================================================================
 
 #ifndef ABC_MAX_NOTES
-#define ABC_MAX_NOTES 128          // Maximum notes per voice
+#define ABC_MAX_NOTES 512          // Maximum notes per voice
 #endif
 
 #ifndef ABC_MAX_TITLE_LEN
