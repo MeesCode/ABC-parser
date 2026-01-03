@@ -6,6 +6,7 @@
 // ============================================================================
 
 static NotePool g_note_pools[ABC_MAX_VOICES];
+static struct note g_note_storage[ABC_MAX_VOICES][ABC_MAX_NOTES];
 static struct sheet g_sheet;
 
 static const char *music =
@@ -42,20 +43,22 @@ int main(void) {
     printf("ABC Music Parser (Embedded Version)\n");
     printf("====================================\n\n");
 
+    // Initialize pools with external storage
     for (int i = 0; i < ABC_MAX_VOICES; i++) {
-        note_pool_init(&g_note_pools[i]);
+        note_pool_init_ext(&g_note_pools[i], g_note_storage[i], ABC_MAX_NOTES, ABC_MAX_CHORD_NOTES);
     }
     sheet_init(&g_sheet, g_note_pools, ABC_MAX_VOICES);
 
     printf("Memory footprint:\n");
     printf("  Note struct:  %3zu bytes\n", sizeof(struct note));
     printf("  Sheet struct: %3zu bytes\n", sizeof(struct sheet));
-    printf("  Note pool:    %3zu bytes (%u notes)\n",
-           sizeof(g_note_pools[0]), g_note_pools[0].capacity);
-    printf("  Total pools:  %3zu bytes (%d pools)\n",
-           sizeof(g_note_pools), ABC_MAX_VOICES);
+    printf("  NotePool:     %3zu bytes (header only)\n", sizeof(NotePool));
+    printf("  Note storage: %3zu bytes (%u notes per voice)\n",
+           sizeof(g_note_storage[0]), ABC_MAX_NOTES);
+    printf("  Total pools:  %3zu bytes (%d voices)\n",
+           sizeof(g_note_pools) + sizeof(g_note_storage), ABC_MAX_VOICES);
     printf("  Total static: %3zu bytes\n\n",
-           sizeof(g_note_pools) + sizeof(g_sheet));
+           sizeof(g_note_pools) + sizeof(g_note_storage) + sizeof(g_sheet));
 
     int result = abc_parse(&g_sheet, music);
 

@@ -74,15 +74,17 @@ struct note {
     uint8_t midi_note[ABC_MAX_CHORD_NOTES];  // MIDI note numbers (0-127, 0 = rest)
 };
 
-// Pre-allocated note pool (one per voice)
+// Note pool structure (one per voice)
+// Initialize with note_pool_init_ext() for custom capacity, or note_pool_init() for defaults
 typedef struct {
-    struct note notes[ABC_MAX_NOTES];
+    struct note *notes;      // Pointer to notes array (user provides storage)
     char voice_id[ABC_MAX_VOICE_ID_LEN];  // Voice identifier (e.g., "SINE", "SQUARE")
-    int16_t head_index;     // Index of first note (-1 = empty)
-    int16_t tail_index;     // Index of last note (-1 = empty)
-    uint16_t count;         // Number of notes currently in use
-    uint16_t capacity;      // Always ABC_MAX_NOTES
-    uint32_t total_ticks;   // Total duration in MIDI ticks for this voice
+    int16_t head_index;      // Index of first note (-1 = empty)
+    int16_t tail_index;      // Index of last note (-1 = empty)
+    uint16_t count;          // Number of notes currently in use
+    uint16_t capacity;       // Max notes this pool can hold
+    uint32_t total_ticks;    // Total duration in MIDI ticks for this voice
+    uint8_t max_chord_notes; // Max notes per chord (for validation)
 } NotePool;
 
 // Sheet structure - contains the parsed music (all statically allocated)
@@ -114,7 +116,15 @@ extern const uint16_t midi_frequencies_x10[128];
 // Memory Pool Functions
 // ============================================================================
 
-// Initialize a note pool (call once at startup for each pool)
+// Initialize a note pool with external buffer (allows custom capacity per pool)
+// buffer: pre-allocated array of struct note (user provides storage)
+// capacity: number of notes the buffer can hold
+// max_chord_notes: maximum simultaneous notes per chord (clamped to ABC_MAX_CHORD_NOTES)
+void note_pool_init_ext(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes);
+
+// Initialize a note pool - DEPRECATED, use note_pool_init_ext() instead
+// This function requires the note storage to immediately follow the NotePool in memory
+// Only use with structures that have NotePool followed by struct note[ABC_MAX_NOTES]
 void note_pool_init(NotePool *pool);
 
 // Reset pool (reuse memory for new parse)

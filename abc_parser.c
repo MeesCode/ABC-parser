@@ -179,14 +179,25 @@ const char *accidental_to_string(int8_t acc) {
 // Memory pool functions
 // ============================================================================
 
-void note_pool_init(NotePool *pool) {
+void note_pool_init_ext(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes) {
     if (!pool) return;
+    pool->notes = buffer;
     pool->count = 0;
-    pool->capacity = ABC_MAX_NOTES;
+    pool->capacity = capacity;
+    pool->max_chord_notes = max_chord_notes > 0 ? max_chord_notes : ABC_MAX_CHORD_NOTES;
     pool->head_index = -1;
     pool->tail_index = -1;
     pool->total_ticks = 0;
     pool->voice_id[0] = '\0';
+}
+
+// DEPRECATED: This function is kept for backwards compatibility but should not be used
+// It assumes notes array follows immediately after the NotePool struct in memory
+void note_pool_init(NotePool *pool) {
+    if (!pool) return;
+    // Assume notes array follows immediately after pool in memory
+    struct note *notes = (struct note *)(pool + 1);
+    note_pool_init_ext(pool, notes, ABC_MAX_NOTES, ABC_MAX_CHORD_NOTES);
 }
 
 void note_pool_reset(NotePool *pool) {
@@ -203,13 +214,14 @@ int note_pool_available(const NotePool *pool) {
 }
 
 static int16_t note_pool_alloc(NotePool *pool) {
-    if (!pool || pool->count >= pool->capacity) return -1;
+    if (!pool || !pool->notes || pool->count >= pool->capacity) return -1;
     int16_t index = (int16_t)pool->count;
     pool->count++;
     struct note *n = &pool->notes[index];
     n->next_index = -1;
     n->duration = 0;
     n->chord_size = 0;
+    // Clear midi_note array (use compile-time size since struct is fixed)
     for (int i = 0; i < ABC_MAX_CHORD_NOTES; i++) {
         n->midi_note[i] = 0;
     }
@@ -235,11 +247,7 @@ void sheet_init(struct sheet *sheet, NotePool *pools, uint8_t pool_count) {
     sheet->default_note_den = 8;
     sheet->meter_num = 4;
     sheet->meter_den = 4;
-
-    // Initialize all pools
-    for (uint8_t i = 0; i < pool_count; i++) {
-        note_pool_init(&pools[i]);
-    }
+    // Note: pools should already be initialized by caller via note_pool_init_ext()
 }
 
 void sheet_reset(struct sheet *sheet) {
@@ -290,11 +298,16 @@ static int pool_append_note(NotePool *pool, uint8_t chord_size,
     if (index < 0) return -1;
 
     struct note *n = &pool->notes[index];
+    // Clamp chord size to pool's max (and struct's compile-time max)
+    uint8_t max_chord = pool->max_chord_notes;
+    if (max_chord > ABC_MAX_CHORD_NOTES) max_chord = ABC_MAX_CHORD_NOTES;
+    if (chord_size > max_chord) chord_size = max_chord;
+
     n->chord_size = chord_size;
     n->duration = duration_ticks;
     n->next_index = -1;
 
-    for (uint8_t i = 0; i < chord_size && i < ABC_MAX_CHORD_NOTES; i++) {
+    for (uint8_t i = 0; i < chord_size; i++) {
         // Only store MIDI note - other properties derived on demand
         n->midi_note[i] = (uint8_t)note_to_midi(names[i], octaves[i], accs[i]);
     }

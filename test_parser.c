@@ -7,6 +7,7 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 static NotePool g_pools[ABC_MAX_VOICES];
+static struct note g_note_storage[ABC_MAX_VOICES][ABC_MAX_NOTES];
 static struct sheet g_sheet;
 
 // Convenience macro to get note count from first pool
@@ -827,9 +828,9 @@ int main(void) {
     printf("ABC Parser Test Suite\n");
     printf("=====================\n\n");
 
-    // Initialize
+    // Initialize pools with external storage
     for (int i = 0; i < ABC_MAX_VOICES; i++) {
-        note_pool_init(&g_pools[i]);
+        note_pool_init_ext(&g_pools[i], g_note_storage[i], ABC_MAX_NOTES, ABC_MAX_CHORD_NOTES);
     }
     sheet_init(&g_sheet, g_pools, ABC_MAX_VOICES);
 
