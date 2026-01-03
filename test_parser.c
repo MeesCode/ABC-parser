@@ -809,6 +809,16 @@ TEST(voice_without_key) {
     return 1;
 }
 
+TEST(voice_inline_whitespace) {
+    // V: followed by space instead of newline should work
+    int result = abc_parse(&g_sheet, "V:NOISE A B C");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.voice_count, 1);
+    ASSERT(strcmp(g_pools[0].voice_id, "NOISE") == 0);
+    ASSERT_EQ(g_pools[0].count, 3);
+    return 1;
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -925,6 +935,7 @@ int main(void) {
     RUN_TEST(two_voices);
     RUN_TEST(voice_continuation);
     RUN_TEST(voice_without_key);
+    RUN_TEST(voice_inline_whitespace);
 
     printf("\n=====================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

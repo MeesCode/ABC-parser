@@ -695,23 +695,30 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             advance(s); // V
             advance(s); // :
 
-            uint16_t id_start = s->pos;
-            while (s->pos < s->len && s->input[s->pos] != '\n' && s->input[s->pos] != '\r') {
+            // Skip leading whitespace
+            while (s->pos < s->len && (s->input[s->pos] == ' ' || s->input[s->pos] == '\t')) {
                 s->pos++;
+            }
+
+            // Read voice ID (alphanumeric characters only)
+            uint16_t id_start = s->pos;
+            while (s->pos < s->len) {
+                char ch = s->input[s->pos];
+                // Voice ID is alphanumeric, stop at whitespace or any other character
+                if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                    (ch >= '0' && ch <= '9') || ch == '_' || ch == '-') {
+                    s->pos++;
+                } else {
+                    break;
+                }
             }
             uint8_t id_len = (uint8_t)(s->pos - id_start);
 
-            // Trim whitespace
-            while (id_len > 0 && (s->input[id_start] == ' ' || s->input[id_start] == '\t')) {
-                id_start++; id_len--;
-            }
-            while (id_len > 0 && (s->input[id_start + id_len - 1] == ' ' || s->input[id_start + id_len - 1] == '\t')) {
-                id_len--;
-            }
-
-            int voice_idx = find_or_create_voice(sheet, s->input + id_start, id_len);
-            if (voice_idx >= 0) {
-                s->current_voice = (uint8_t)voice_idx;
+            if (id_len > 0) {
+                int voice_idx = find_or_create_voice(sheet, s->input + id_start, id_len);
+                if (voice_idx >= 0) {
+                    s->current_voice = (uint8_t)voice_idx;
+                }
             }
             continue;
         }
