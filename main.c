@@ -2,11 +2,14 @@
 #include "abc_parser.h"
 
 // ============================================================================
-// Pre-allocated memory - adjust ABC_MAX_NOTES in abc_parser.h for your needs
+// Pre-allocated memory - adjust sizes as needed for your application
 // ============================================================================
 
-static NotePool g_note_pools[ABC_MAX_VOICES];
-static struct note g_note_storage[ABC_MAX_VOICES][ABC_MAX_NOTES];
+#define MY_MAX_VOICES 2
+#define MY_MAX_NOTES 512
+
+static NotePool g_note_pools[MY_MAX_VOICES];
+static struct note g_note_storage[MY_MAX_VOICES][MY_MAX_NOTES];
 static struct sheet g_sheet;
 
 static const char *music =
@@ -44,19 +47,19 @@ int main(void) {
     printf("====================================\n\n");
 
     // Initialize pools with external storage
-    for (int i = 0; i < ABC_MAX_VOICES; i++) {
-        note_pool_init_ext(&g_note_pools[i], g_note_storage[i], ABC_MAX_NOTES, ABC_MAX_CHORD_NOTES);
+    for (int i = 0; i < MY_MAX_VOICES; i++) {
+        note_pool_init(&g_note_pools[i], g_note_storage[i], MY_MAX_NOTES, ABC_MAX_CHORD_NOTES);
     }
-    sheet_init(&g_sheet, g_note_pools, ABC_MAX_VOICES);
+    sheet_init(&g_sheet, g_note_pools, MY_MAX_VOICES);
 
     printf("Memory footprint:\n");
     printf("  Note struct:  %3zu bytes\n", sizeof(struct note));
     printf("  Sheet struct: %3zu bytes\n", sizeof(struct sheet));
     printf("  NotePool:     %3zu bytes (header only)\n", sizeof(NotePool));
-    printf("  Note storage: %3zu bytes (%u notes per voice)\n",
-           sizeof(g_note_storage[0]), ABC_MAX_NOTES);
+    printf("  Note storage: %3zu bytes (%d notes per voice)\n",
+           sizeof(g_note_storage[0]), MY_MAX_NOTES);
     printf("  Total pools:  %3zu bytes (%d voices)\n",
-           sizeof(g_note_pools) + sizeof(g_note_storage), ABC_MAX_VOICES);
+           sizeof(g_note_pools) + sizeof(g_note_storage), MY_MAX_VOICES);
     printf("  Total static: %3zu bytes\n\n",
            sizeof(g_note_pools) + sizeof(g_note_storage) + sizeof(g_sheet));
 

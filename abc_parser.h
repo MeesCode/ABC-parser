@@ -7,10 +7,6 @@
 // Configuration - adjust these for your embedded system
 // ============================================================================
 
-#ifndef ABC_MAX_NOTES
-#define ABC_MAX_NOTES 512          // Maximum notes per voice
-#endif
-
 #ifndef ABC_MAX_TITLE_LEN
 #define ABC_MAX_TITLE_LEN 32       // Maximum title string length
 #endif
@@ -24,11 +20,7 @@
 #endif
 
 #ifndef ABC_MAX_CHORD_NOTES
-#define ABC_MAX_CHORD_NOTES 4      // Maximum notes in a chord
-#endif
-
-#ifndef ABC_MAX_VOICES
-#define ABC_MAX_VOICES 2           // Maximum number of voices (increase if needed)
+#define ABC_MAX_CHORD_NOTES 4      // Maximum notes in a chord (affects struct note size)
 #endif
 
 #ifndef ABC_MAX_VOICE_ID_LEN
@@ -75,7 +67,7 @@ struct note {
 };
 
 // Note pool structure (one per voice)
-// Initialize with note_pool_init_ext() for custom capacity, or note_pool_init() for defaults
+// Initialize with note_pool_init() before use
 typedef struct {
     struct note *notes;      // Pointer to notes array (user provides storage)
     char voice_id[ABC_MAX_VOICE_ID_LEN];  // Voice identifier (e.g., "SINE", "SQUARE")
@@ -116,16 +108,11 @@ extern const uint16_t midi_frequencies_x10[128];
 // Memory Pool Functions
 // ============================================================================
 
-// Initialize a note pool with external buffer (allows custom capacity per pool)
+// Initialize a note pool with external buffer
 // buffer: pre-allocated array of struct note (user provides storage)
 // capacity: number of notes the buffer can hold
 // max_chord_notes: maximum simultaneous notes per chord (clamped to ABC_MAX_CHORD_NOTES)
-void note_pool_init_ext(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes);
-
-// Initialize a note pool - DEPRECATED, use note_pool_init_ext() instead
-// This function requires the note storage to immediately follow the NotePool in memory
-// Only use with structures that have NotePool followed by struct note[ABC_MAX_NOTES]
-void note_pool_init(NotePool *pool);
+void note_pool_init(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes);
 
 // Reset pool (reuse memory for new parse)
 void note_pool_reset(NotePool *pool);
@@ -138,7 +125,8 @@ int note_pool_available(const NotePool *pool);
 // ============================================================================
 
 // Initialize a sheet structure with an array of note pools
-// pool_count should be ABC_MAX_VOICES (or at least 1)
+// pools: array of NotePool structs (must be initialized with note_pool_init first)
+// pool_count: number of pools in the array (determines max voices)
 void sheet_init(struct sheet *sheet, NotePool *pools, uint8_t pool_count);
 
 // Parse ABC notation into pre-allocated sheet

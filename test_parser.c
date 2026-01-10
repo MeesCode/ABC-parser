@@ -6,8 +6,12 @@
 // Test infrastructure
 static int tests_run = 0;
 static int tests_passed = 0;
-static NotePool g_pools[ABC_MAX_VOICES];
-static struct note g_note_storage[ABC_MAX_VOICES][ABC_MAX_NOTES];
+
+#define TEST_MAX_VOICES 2
+#define TEST_MAX_NOTES 512
+
+static NotePool g_pools[TEST_MAX_VOICES];
+static struct note g_note_storage[TEST_MAX_VOICES][TEST_MAX_NOTES];
 static struct sheet g_sheet;
 
 // Convenience macro to get note count from first pool
@@ -675,7 +679,7 @@ TEST(pool_exhaustion) {
     // Generate more notes than pool capacity
     char big_input[2048];
     strcpy(big_input, "K:C\n");
-    for (int i = 0; i < ABC_MAX_NOTES + 10; i++) {
+    for (int i = 0; i < TEST_MAX_NOTES + 10; i++) {
         strcat(big_input, "C ");
     }
 
@@ -829,10 +833,10 @@ int main(void) {
     printf("=====================\n\n");
 
     // Initialize pools with external storage
-    for (int i = 0; i < ABC_MAX_VOICES; i++) {
-        note_pool_init_ext(&g_pools[i], g_note_storage[i], ABC_MAX_NOTES, ABC_MAX_CHORD_NOTES);
+    for (int i = 0; i < TEST_MAX_VOICES; i++) {
+        note_pool_init(&g_pools[i], g_note_storage[i], TEST_MAX_NOTES, ABC_MAX_CHORD_NOTES);
     }
-    sheet_init(&g_sheet, g_pools, ABC_MAX_VOICES);
+    sheet_init(&g_sheet, g_pools, TEST_MAX_VOICES);
 
     printf("Basic Parsing:\n");
     RUN_TEST(empty_input);

@@ -7,27 +7,26 @@ A lightweight, embedded-friendly parser for ABC music notation written in C99. P
 ## Features
 
 - **Zero dynamic allocation** - uses pre-allocated memory pools
+- **Runtime configurable** - set note count, voices, and chord size per pool at init time
 - **Multi-voice support** - parse multiple voices into separate note pools
-- **Chord support** - `[CEG]` notation with up to 4 simultaneous pitches
+- **Chord support** - `[CEG]` notation with configurable simultaneous pitches
 - **Tuplet support** - triplets `(3CDE`, duplets `(2CD`, and more (2-9)
 - **Repeat unfolding** - `|: ... :|` sections are expanded inline
 - **Key signature support** - major and minor keys with correct accidentals
 - **Tempo with note value** - `Q:1/4=120` (quarter=120) or `Q:1/8=120` (eighth=120)
 - **Embedded-ready** - no stdlib dependencies except `<string.h>` and `<stdint.h>`
-- **Configurable limits** - adjust note count, voices, and string lengths at compile time
 
 ## Memory Usage
 
-With default settings (2 voices, 128 notes per voice, 4 notes per chord):
+Memory usage depends on your configuration. With 2 voices, 128 notes per voice, 4 notes per chord:
 
 | Component | Size |
 |-----------|------|
 | Note struct | 8 bytes |
 | Sheet struct | 96 bytes |
-| Note pool (128 notes) | 1,052 bytes |
-| **Total (2 voice pools)** | **~2.2 KB** |
-
-For single-voice applications with `ABC_MAX_VOICES=1`: **~1.1 KB**
+| NotePool header | 40 bytes |
+| Note storage (128 notes) | 1,024 bytes |
+| **Total (2 voices)** | **~2.2 KB** |
 
 Notes store only MIDI note numbers and duration in MIDI ticks (PPQ=48). Frequency, note name, and octave are computed on demand via API functions.
 
@@ -52,16 +51,21 @@ gcc -O2 -o abcparser main.c abc_parser.c
 ```c
 #include "abc_parser.h"
 
+// Define your limits
+#define MAX_VOICES 2
+#define MAX_NOTES 128
+
 // Pre-allocate memory (static or global)
-static NotePool g_pools[ABC_MAX_VOICES];
+static NotePool g_pools[MAX_VOICES];
+static struct note g_storage[MAX_VOICES][MAX_NOTES];
 static struct sheet g_sheet;
 
 int main(void) {
-    // Initialize pools and sheet
-    for (int i = 0; i < ABC_MAX_VOICES; i++) {
-        note_pool_init(&g_pools[i]);
+    // Initialize pools with storage
+    for (int i = 0; i < MAX_VOICES; i++) {
+        note_pool_init(&g_pools[i], g_storage[i], MAX_NOTES, ABC_MAX_CHORD_NOTES);
     }
-    sheet_init(&g_sheet, g_pools, ABC_MAX_VOICES);
+    sheet_init(&g_sheet, g_pools, MAX_VOICES);
 
     // Parse ABC notation
     const char *music = "L:1/4\nK:C\nC D E F | G A B c |";
@@ -138,6 +142,22 @@ while (n) {
 }
 ```
 
+### Different Pool Sizes
+
+You can create pools with different capacities:
+
+```c
+// Small pool for simple melodies
+static NotePool melody_pool;
+static struct note melody_storage[64];
+note_pool_init(&melody_pool, melody_storage, 64, 1);  // 64 notes, single notes only
+
+// Large pool for complex compositions
+static NotePool complex_pool;
+static struct note complex_storage[1024];
+note_pool_init(&complex_pool, complex_storage, 1024, 4);  // 1024 notes, up to 4-note chords
+```
+
 ## Supported ABC Notation
 
 | Element | Syntax | Example |
@@ -192,11 +212,9 @@ The tempo field supports specifying which note value gets the beat:
 
 ## Configuration
 
-Adjust limits in `abc_parser.h` or via compile flags:
+Compile-time defines in `abc_parser.h` (affects struct sizes):
 
 ```c
-#define ABC_MAX_NOTES       128  // Max notes per voice
-#define ABC_MAX_VOICES        2  // Max number of voices
 #define ABC_MAX_CHORD_NOTES   4  // Max simultaneous notes in a chord
 #define ABC_MAX_TITLE_LEN    32  // Title string buffer
 #define ABC_MAX_COMPOSER_LEN 32  // Composer string buffer
@@ -205,11 +223,9 @@ Adjust limits in `abc_parser.h` or via compile flags:
 #define ABC_PPQ              48  // Pulses per quarter note (MIDI ticks)
 ```
 
-Or compile with:
-
-```bash
-gcc -DABC_MAX_NOTES=256 -DABC_MAX_VOICES=4 -o abcparser main.c abc_parser.c
-```
+Runtime parameters (passed to `note_pool_init()`):
+- **capacity** - max notes per pool (no compile-time limit)
+- **max_chord_notes** - max notes per chord for this pool (clamped to ABC_MAX_CHORD_NOTES)
 
 ## Data Structures
 
@@ -230,13 +246,14 @@ Note properties (frequency, note name, octave) are computed on demand from MIDI 
 
 ```c
 typedef struct {
-    struct note notes[ABC_MAX_NOTES];
+    struct note *notes;       // Pointer to note storage (user-provided)
     char voice_id[ABC_MAX_VOICE_ID_LEN];  // Voice identifier
-    int16_t head_index;                    // First note index
-    int16_t tail_index;                    // Last note index
-    uint16_t count;                        // Notes in use
-    uint16_t capacity;                     // Always ABC_MAX_NOTES
-    uint32_t total_ticks;                  // Total duration in MIDI ticks
+    int16_t head_index;       // First note index
+    int16_t tail_index;       // Last note index
+    uint16_t count;           // Notes in use
+    uint16_t capacity;        // Max notes (from init)
+    uint32_t total_ticks;     // Total duration in MIDI ticks
+    uint8_t max_chord_notes;  // Max chord size (from init)
 } NotePool;
 ```
 
@@ -245,9 +262,14 @@ typedef struct {
 ### Initialization
 
 ```c
-void note_pool_init(NotePool *pool);                              // Initialize pool
-void sheet_init(struct sheet *s, NotePool *pools, uint8_t count); // Initialize sheet
-void sheet_reset(struct sheet *s);                                // Reset for reuse
+// Initialize a note pool with external storage
+void note_pool_init(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes);
+
+// Initialize sheet with array of pools
+void sheet_init(struct sheet *s, NotePool *pools, uint8_t pool_count);
+
+// Reset for reuse (clears all pools)
+void sheet_reset(struct sheet *s);
 ```
 
 ### Parsing
@@ -309,7 +331,7 @@ ctest
 ./test_parser
 ```
 
-70 tests covering notes, octaves, accidentals, durations, tuplets, rests, key signatures, header fields, repeats, frequencies, MIDI notes, chords, and voices.
+72 tests covering notes, octaves, accidentals, durations, tuplets, rests, key signatures, header fields, repeats, frequencies, MIDI notes, chords, and voices.
 
 ## License
 

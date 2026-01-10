@@ -179,7 +179,7 @@ const char *accidental_to_string(int8_t acc) {
 // Memory pool functions
 // ============================================================================
 
-void note_pool_init_ext(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes) {
+void note_pool_init(NotePool *pool, struct note *buffer, uint16_t capacity, uint8_t max_chord_notes) {
     if (!pool) return;
     pool->notes = buffer;
     pool->count = 0;
@@ -189,15 +189,6 @@ void note_pool_init_ext(NotePool *pool, struct note *buffer, uint16_t capacity, 
     pool->tail_index = -1;
     pool->total_ticks = 0;
     pool->voice_id[0] = '\0';
-}
-
-// DEPRECATED: This function is kept for backwards compatibility but should not be used
-// It assumes notes array follows immediately after the NotePool struct in memory
-void note_pool_init(NotePool *pool) {
-    if (!pool) return;
-    // Assume notes array follows immediately after pool in memory
-    struct note *notes = (struct note *)(pool + 1);
-    note_pool_init_ext(pool, notes, ABC_MAX_NOTES, ABC_MAX_CHORD_NOTES);
 }
 
 void note_pool_reset(NotePool *pool) {
