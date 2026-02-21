@@ -100,6 +100,8 @@ typedef struct {
     uint8_t tuplet_num;
     uint8_t tuplet_in_time;
     uint8_t current_voice;       // Current voice index
+    uint8_t has_explicit_L;      // L: field was explicitly set
+    uint8_t has_explicit_Q_note; // Q: field had explicit note value (e.g. Q:1/4=120 vs Q:120)
 } ParserState;
 
 // ============================================================================
@@ -431,6 +433,7 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
                 if (num > 0 && den > 0) {
                     s->default_num = sheet->default_note_num = (uint8_t)num;
                     s->default_den = sheet->default_note_den = (uint8_t)den;
+                    s->has_explicit_L = 1;
                 }
                 break;
             }
@@ -468,6 +471,7 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
                     if (note_num > 0 && note_den > 0) {
                         s->tempo_note_num = sheet->tempo_note_num = (uint8_t)note_num;
                         s->tempo_note_den = sheet->tempo_note_den = (uint8_t)note_den;
+                        s->has_explicit_Q_note = 1;
                     }
                 }
                 i = eq_pos;
@@ -837,8 +841,40 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
     };
     memset(s.key_accidentals, 0, 7);
     memset(s.bar_accidentals, 0, 7);
+    s.has_explicit_L = 0;
+    s.has_explicit_Q_note = 0;
 
     parse_header(&s, sheet);
+
+    // Derive default note length from meter if L: was not explicitly set
+    // ABC standard: if meter >= 3/4, L:1/8; if meter < 3/4, L:1/16
+    if (!s.has_explicit_L && s.meter_den > 0) {
+        if (s.meter_num * 4 >= s.meter_den * 3) {
+            s.default_num = sheet->default_note_num = 1;
+            s.default_den = sheet->default_note_den = 8;
+        } else {
+            s.default_num = sheet->default_note_num = 1;
+            s.default_den = sheet->default_note_den = 16;
+        }
+    }
+
+    // When Q: has no explicit note value (bare "Q:120" or no Q: at all),
+    // the tempo refers to the default note length, not quarter notes
+    if (!s.has_explicit_Q_note) {
+        s.tempo_note_num = sheet->tempo_note_num = s.default_num;
+        s.tempo_note_den = sheet->tempo_note_den = s.default_den;
+    }
+
+    // Normalize BPM to quarter-note equivalent so ticks_to_ms works correctly.
+    // tempo_note tells us what note value the BPM refers to.
+    // Quarter-note BPM = BPM * (tempo_note / quarter_note) = BPM * 4 * tempo_note_num / tempo_note_den
+    if (s.tempo_note_den > 0) {
+        uint32_t effective_bpm = (uint32_t)s.tempo_bpm * 4 * s.tempo_note_num / s.tempo_note_den;
+        if (effective_bpm > 0 && effective_bpm <= 0xFFFF) {
+            s.tempo_bpm = sheet->tempo_bpm = (uint16_t)effective_bpm;
+        }
+    }
+
     return parse_notes(&s, sheet);
 }
 

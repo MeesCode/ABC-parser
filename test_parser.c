@@ -483,11 +483,11 @@ TEST(header_tempo_with_note_value) {
 
 TEST(header_tempo_eighth_note) {
     // Q:1/8=120 means eighth note = 120 BPM
+    // BPM is normalized to quarter-note equivalent: 120 * 4 * 1/8 = 60
     // Ticks are tempo-independent: L:1/4 = 48 ticks always
-    // tempo_note only affects ticks_to_ms conversion
     int result = abc_parse(&g_sheet, "Q:1/8=120\nL:1/4\nK:C\nC");
     ASSERT_EQ(result, 0);
-    ASSERT_EQ(g_sheet.tempo_bpm, 120);
+    ASSERT_EQ(g_sheet.tempo_bpm, 60);  // Normalized to quarter-note BPM
     ASSERT_EQ(g_sheet.tempo_note_num, 1);
     ASSERT_EQ(g_sheet.tempo_note_den, 8);
     struct note *n = sheet_first_note(&g_sheet);
@@ -706,7 +706,9 @@ TEST(greensleeves_excerpt) {
     ASSERT(strcmp(g_sheet.title, "Greensleeves") == 0);
     ASSERT_EQ(g_sheet.meter_num, 6);
     ASSERT_EQ(g_sheet.meter_den, 8);
-    ASSERT_EQ(g_sheet.tempo_bpm, 120);
+    // Q:120 with L:1/8 (no explicit note value) = 120 eighth notes/min
+    // Normalized to quarter-note BPM: 120 * 4 * 1/8 = 60
+    ASSERT_EQ(g_sheet.tempo_bpm, 60);
     // A G E2 A2 E2 A2 = 6 notes (repeat unfolded)
     ASSERT_EQ(NOTE_COUNT(), 6);
     return 1;
@@ -717,6 +719,88 @@ TEST(total_duration) {
     ASSERT_EQ(result, 0);
     // 4 quarter notes = 4 * 48 ticks = 192 ticks
     ASSERT_EQ(TOTAL_TICKS(), 192);
+    return 1;
+}
+
+// ============================================================================
+// Tempo Normalization Tests
+// ============================================================================
+
+TEST(tempo_bare_number_with_eighth_default) {
+    // Q:120 with L:1/8 means 120 eighth notes per minute
+    // Normalized: 120 * 4 * 1/8 = 60 quarter-note BPM
+    int result = abc_parse(&g_sheet, "L:1/8\nQ:120\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 60);
+    return 1;
+}
+
+TEST(tempo_bare_number_with_quarter_default) {
+    // Q:120 with L:1/4 means 120 quarter notes per minute
+    // Normalized: 120 * 4 * 1/4 = 120 (unchanged)
+    int result = abc_parse(&g_sheet, "L:1/4\nQ:120\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 120);
+    return 1;
+}
+
+TEST(tempo_explicit_dotted_quarter) {
+    // Q:3/8=120 means 120 dotted-quarter notes per minute
+    // Normalized: 120 * 4 * 3/8 = 180 quarter-note BPM
+    int result = abc_parse(&g_sheet, "Q:3/8=120\nL:1/8\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 180);
+    ASSERT_EQ(g_sheet.tempo_note_num, 3);
+    ASSERT_EQ(g_sheet.tempo_note_den, 8);
+    return 1;
+}
+
+TEST(tempo_no_q_field_uses_default_length) {
+    // No Q: field with L:1/8 → default 120 eighth notes/min = 60 quarter-note BPM
+    int result = abc_parse(&g_sheet, "L:1/8\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 60);
+    return 1;
+}
+
+TEST(tempo_no_q_field_quarter_default) {
+    // No Q: field with L:1/4 → default 120 quarter notes/min = 120 quarter-note BPM
+    int result = abc_parse(&g_sheet, "L:1/4\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.tempo_bpm, 120);
+    return 1;
+}
+
+TEST(default_length_from_meter_68) {
+    // M:6/8 without L: → 6/8 >= 3/4, so L:1/8
+    int result = abc_parse(&g_sheet, "M:6/8\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.default_note_num, 1);
+    ASSERT_EQ(g_sheet.default_note_den, 8);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration, 24);  // 1/8 = 24 ticks
+    return 1;
+}
+
+TEST(default_length_from_meter_24) {
+    // M:2/4 without L: → 2/4 < 3/4, so L:1/16
+    int result = abc_parse(&g_sheet, "M:2/4\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.default_note_num, 1);
+    ASSERT_EQ(g_sheet.default_note_den, 16);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration, 12);  // 1/16 = 12 ticks
+    return 1;
+}
+
+TEST(explicit_length_overrides_meter) {
+    // M:2/4 with explicit L:1/8 → L:1/8 wins
+    int result = abc_parse(&g_sheet, "M:2/4\nL:1/8\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(g_sheet.default_note_num, 1);
+    ASSERT_EQ(g_sheet.default_note_den, 8);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(n->duration, 24);  // 1/8 = 24 ticks
     return 1;
 }
 
@@ -924,6 +1008,16 @@ int main(void) {
 
     printf("\nError Handling:\n");
     RUN_TEST(pool_exhaustion);
+
+    printf("\nTempo Normalization:\n");
+    RUN_TEST(tempo_bare_number_with_eighth_default);
+    RUN_TEST(tempo_bare_number_with_quarter_default);
+    RUN_TEST(tempo_explicit_dotted_quarter);
+    RUN_TEST(tempo_no_q_field_uses_default_length);
+    RUN_TEST(tempo_no_q_field_quarter_default);
+    RUN_TEST(default_length_from_meter_68);
+    RUN_TEST(default_length_from_meter_24);
+    RUN_TEST(explicit_length_overrides_meter);
 
     printf("\nIntegration Tests:\n");
     RUN_TEST(greensleeves_excerpt);
