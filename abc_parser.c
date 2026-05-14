@@ -225,19 +225,21 @@ static int16_t note_pool_alloc(NotePool *pool) {
 // Sheet functions
 // ============================================================================
 
+// Score defaults applied when the corresponding header is absent:
+// K:C, L:1/4, Q:1/4=100.
 void sheet_init(struct sheet *sheet, NotePool *pools, uint8_t pool_count) {
     if (!sheet) return;
     sheet->pools = pools;
     sheet->pool_count = pool_count;
     sheet->voice_count = 0;
-    sheet->tempo_bpm = 120;
+    sheet->tempo_bpm = 100;
     sheet->tempo_note_num = 1;
     sheet->tempo_note_den = 4;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
-    sheet->key[0] = '\0';
+    sheet->key[0] = 'C'; sheet->key[1] = '\0';
     sheet->default_note_num = 1;
-    sheet->default_note_den = 8;
+    sheet->default_note_den = 4;
     sheet->meter_num = 4;
     sheet->meter_den = 4;
     // Note: pools should already be initialized by caller via note_pool_init_ext()
@@ -249,16 +251,16 @@ void sheet_reset(struct sheet *sheet) {
         note_pool_reset(&sheet->pools[i]);
     }
     sheet->voice_count = 0;
-    sheet->tempo_bpm = 120;
+    sheet->tempo_bpm = 100;
     sheet->tempo_note_num = 1;
     sheet->tempo_note_den = 4;
     sheet->default_note_num = 1;
-    sheet->default_note_den = 8;
+    sheet->default_note_den = 4;
     sheet->meter_num = 4;
     sheet->meter_den = 4;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
-    sheet->key[0] = '\0';
+    sheet->key[0] = 'C'; sheet->key[1] = '\0';
 }
 
 struct note *note_get(const NotePool *pool, int index) {
@@ -846,17 +848,7 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
 
     parse_header(&s, sheet);
 
-    // Derive default note length from meter if L: was not explicitly set
-    // ABC standard: if meter >= 3/4, L:1/8; if meter < 3/4, L:1/16
-    if (!s.has_explicit_L && s.meter_den > 0) {
-        if (s.meter_num * 4 >= s.meter_den * 3) {
-            s.default_num = sheet->default_note_num = 1;
-            s.default_den = sheet->default_note_den = 8;
-        } else {
-            s.default_num = sheet->default_note_num = 1;
-            s.default_den = sheet->default_note_den = 16;
-        }
-    }
+    // When L: is absent the value from sheet_init/sheet_reset (L:1/4) persists.
 
     // When Q: has no explicit note value (bare "Q:120" or no Q: at all),
     // the tempo refers to the default note length, not quarter notes
