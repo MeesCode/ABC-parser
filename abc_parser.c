@@ -1,6 +1,8 @@
 #include "abc_parser.h"
-#include <stdio.h>
 #include <string.h>
+#ifndef ABC_NO_PRINT
+#include <stdio.h>   // only sheet_print() needs stdio
+#endif
 
 // ============================================================================
 // Frequency lookup table indexed by MIDI note (frequency * 10, stored as uint16_t)
@@ -101,6 +103,7 @@ typedef struct {
     uint8_t tuplet_in_time;
     uint8_t current_voice;       // Current voice index
     uint8_t has_explicit_L;      // L: field was explicitly set
+    uint8_t has_explicit_K;      // K: field was explicitly set
     uint8_t has_explicit_Q_note; // Q: field had explicit note value (e.g. Q:1/4=120 vs Q:120)
 } ParserState;
 
@@ -108,11 +111,13 @@ typedef struct {
 // Utility functions
 // ============================================================================
 
+#ifndef ABC_NO_FLOAT
 float note_to_frequency(NoteName name, int octave, int8_t acc) {
     if (name == NOTE_REST) return 0.0f;
     int midi = note_to_midi(name, octave, acc);
     return midi_frequencies_x10[midi] / 10.0f;
 }
+#endif
 
 int note_to_midi(NoteName name, int octave, int8_t acc) {
     if (name == NOTE_REST) return 0;
@@ -207,9 +212,12 @@ int note_pool_available(const NotePool *pool) {
 }
 
 static int16_t note_pool_alloc(NotePool *pool) {
-    if (!pool || !pool->notes || pool->count >= pool->capacity) return -1;
+    if (!pool || pool->count >= pool->capacity) return -1;
     int16_t index = (int16_t)pool->count;
+    if (index < 0) return -1;  // count exceeds int16_t index space
     pool->count++;
+    // Count-only pool (notes == NULL): used by abc_count_notes(). Tally only.
+    if (!pool->notes) return index;
     struct note *n = &pool->notes[index];
     n->next_index = -1;
     n->duration = 0;
@@ -225,23 +233,28 @@ static int16_t note_pool_alloc(NotePool *pool) {
 // Sheet functions
 // ============================================================================
 
-// Score defaults applied when the corresponding header is absent:
-// K:C, L:1/4, Q:1/4=100.
+// Forward declaration (defined with the parser helpers below).
+static void safe_strcpy(char *dest, uint8_t dest_size, const char *src, uint8_t src_len);
+
+// Score defaults applied when the corresponding header is absent are taken from
+// the ABC_DEFAULT_* macros (see abc_parser.h): Q:ABC_DEFAULT_TEMPO_BPM,
+// M:ABC_DEFAULT_METER_NUM/DEN, K:ABC_DEFAULT_KEY, and L: either derived from the
+// meter or fixed to ABC_DEFAULT_NOTE_NUM/DEN (per ABC_DERIVE_LENGTH_FROM_METER).
 void sheet_init(struct sheet *sheet, NotePool *pools, uint8_t pool_count) {
     if (!sheet) return;
     sheet->pools = pools;
     sheet->pool_count = pool_count;
     sheet->voice_count = 0;
-    sheet->tempo_bpm = 100;
-    sheet->tempo_note_num = 1;
-    sheet->tempo_note_den = 4;
+    sheet->tempo_bpm = ABC_DEFAULT_TEMPO_BPM;
+    sheet->tempo_note_num = ABC_DEFAULT_NOTE_NUM;
+    sheet->tempo_note_den = ABC_DEFAULT_NOTE_DEN;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
-    sheet->key[0] = 'C'; sheet->key[1] = '\0';
-    sheet->default_note_num = 1;
-    sheet->default_note_den = 4;
-    sheet->meter_num = 4;
-    sheet->meter_den = 4;
+    safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, ABC_DEFAULT_KEY, (uint8_t)sizeof(ABC_DEFAULT_KEY) - 1);
+    sheet->default_note_num = ABC_DEFAULT_NOTE_NUM;
+    sheet->default_note_den = ABC_DEFAULT_NOTE_DEN;
+    sheet->meter_num = ABC_DEFAULT_METER_NUM;
+    sheet->meter_den = ABC_DEFAULT_METER_DEN;
     // Note: pools should already be initialized by caller via note_pool_init_ext()
 }
 
@@ -251,16 +264,16 @@ void sheet_reset(struct sheet *sheet) {
         note_pool_reset(&sheet->pools[i]);
     }
     sheet->voice_count = 0;
-    sheet->tempo_bpm = 100;
-    sheet->tempo_note_num = 1;
-    sheet->tempo_note_den = 4;
-    sheet->default_note_num = 1;
-    sheet->default_note_den = 4;
-    sheet->meter_num = 4;
-    sheet->meter_den = 4;
+    sheet->tempo_bpm = ABC_DEFAULT_TEMPO_BPM;
+    sheet->tempo_note_num = ABC_DEFAULT_NOTE_NUM;
+    sheet->tempo_note_den = ABC_DEFAULT_NOTE_DEN;
+    sheet->default_note_num = ABC_DEFAULT_NOTE_NUM;
+    sheet->default_note_den = ABC_DEFAULT_NOTE_DEN;
+    sheet->meter_num = ABC_DEFAULT_METER_NUM;
+    sheet->meter_den = ABC_DEFAULT_METER_DEN;
     sheet->title[0] = '\0';
     sheet->composer[0] = '\0';
-    sheet->key[0] = 'C'; sheet->key[1] = '\0';
+    safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, ABC_DEFAULT_KEY, (uint8_t)sizeof(ABC_DEFAULT_KEY) - 1);
 }
 
 struct note *note_get(const NotePool *pool, int index) {
@@ -291,6 +304,7 @@ static int pool_append_note(NotePool *pool, uint8_t chord_size,
 
     int16_t index = note_pool_alloc(pool);
     if (index < 0) return -1;
+    if (!pool->notes) return 0;  // count-only pool: allocation tallied, nothing to store
 
     struct note *n = &pool->notes[index];
     // Clamp chord size to pool's max (and struct's compile-time max)
@@ -486,6 +500,7 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
             case 'K': {
                 safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, val, vlen);
                 set_key_signature(s, sheet->key);
+                s->has_explicit_K = 1;
                 s->pos = end;
                 return;
             }
@@ -661,6 +676,15 @@ static int parse_note_or_chord(ParserState *s, struct sheet *sheet) {
 
 static int copy_repeat_section(NotePool *pool, int16_t start_idx, int16_t end_idx) {
     if (!pool || start_idx < 0) return 0;
+
+    // Count-only pool: notes are contiguous and unlinked, so the repeated span
+    // is simply [start_idx, end_idx]. Tally one allocation per source note.
+    if (!pool->notes) {
+        for (int16_t i = start_idx; i <= end_idx && i < (int16_t)pool->count; i++) {
+            if (note_pool_alloc(pool) < 0) return -1;
+        }
+        return 0;
+    }
 
     int16_t cur = start_idx;
     while (cur >= 0 && cur <= end_idx && cur < (int16_t)pool->count) {
@@ -844,11 +868,28 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
     memset(s.key_accidentals, 0, 7);
     memset(s.bar_accidentals, 0, 7);
     s.has_explicit_L = 0;
+    s.has_explicit_K = 0;
     s.has_explicit_Q_note = 0;
 
     parse_header(&s, sheet);
 
-    // When L: is absent the value from sheet_init/sheet_reset (L:1/4) persists.
+    // When K: is absent, apply the default key signature (ABC_DEFAULT_KEY).
+    if (!s.has_explicit_K) {
+        safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, ABC_DEFAULT_KEY, (uint8_t)sizeof(ABC_DEFAULT_KEY) - 1);
+        set_key_signature(&s, sheet->key);
+    }
+
+#if ABC_DERIVE_LENGTH_FROM_METER
+    // When L: is absent, derive the default note length from the meter (ABC
+    // standard): meter < 3/4 -> 1/16, otherwise 1/8. (meter defaults to 4/4.)
+    if (!s.has_explicit_L) {
+        uint8_t den = ((uint16_t)s.meter_num * 4 < (uint16_t)s.meter_den * 3) ? 16 : 8;
+        s.default_num = sheet->default_note_num = 1;
+        s.default_den = sheet->default_note_den = den;
+    }
+#endif
+    // When ABC_DERIVE_LENGTH_FROM_METER is 0 and L: is absent, the fixed
+    // ABC_DEFAULT_NOTE_NUM/DEN baseline from sheet_init persists.
 
     // When Q: has no explicit note value (bare "Q:120" or no Q: at all),
     // the tempo refers to the default note length, not quarter notes
@@ -871,9 +912,104 @@ int abc_parse(struct sheet *sheet, const char *abc_string) {
 }
 
 // ============================================================================
+// Quality-of-life API (see DESIGN_QOL.md)
+// ============================================================================
+
+size_t abc_storage_bytes(uint8_t voices, uint16_t notes_per_voice) {
+    return (size_t)voices * (size_t)notes_per_voice * sizeof(struct note);
+}
+
+int abc_sheet_setup(struct sheet *sheet, NotePool *pools, struct note *buffer,
+                    uint8_t voices, uint16_t notes_per_voice, uint8_t max_chord_notes) {
+    if (!sheet || !pools || !buffer || voices == 0 || notes_per_voice == 0) return -1;
+    for (uint8_t v = 0; v < voices; v++) {
+        note_pool_init(&pools[v], buffer + (size_t)v * notes_per_voice,
+                       notes_per_voice, max_chord_notes);
+    }
+    sheet_init(sheet, pools, voices);
+    return 0;
+}
+
+void abc_note_iter_init(AbcNoteIter *it, const NotePool *pool, uint8_t loop) {
+    if (!it) return;
+    it->pool = pool;
+    it->cur = pool ? pool_first_note(pool) : NULL;
+    it->loop = loop;
+}
+
+struct note *abc_note_iter_next(AbcNoteIter *it) {
+    if (!it || !it->cur) return NULL;
+    struct note *result = it->cur;
+    struct note *nxt = note_next(it->pool, it->cur);
+    if (!nxt && it->loop) nxt = pool_first_note(it->pool);
+    it->cur = nxt;
+    return result;
+}
+
+NotePool *abc_sheet_voice(const struct sheet *sheet, uint8_t i) {
+    if (!sheet || !sheet->pools || i >= sheet->voice_count) return NULL;
+    return &sheet->pools[i];
+}
+
+int abc_note_is_rest(const struct note *n) {
+    if (!n || n->chord_size == 0) return 1;
+    return (n->chord_size == 1 && midi_is_rest(n->midi_note[0]));
+}
+
+uint16_t abc_note_frequency_x10(const struct note *n, uint8_t chord_idx) {
+    if (!n || chord_idx >= n->chord_size) return 0;
+    if (midi_is_rest(n->midi_note[chord_idx])) return 0;
+    return midi_to_frequency_x10(n->midi_note[chord_idx]);
+}
+
+uint32_t abc_ticks_to_samples(uint8_t ticks, uint16_t bpm, uint32_t sample_rate) {
+    if (bpm == 0) bpm = 120;  // Default BPM (matches ticks_to_ms)
+    // samples = ticks * 60 * sample_rate / (bpm * PPQ)
+    // (derived from ms = ticks*60000/(bpm*PPQ), samples = ms*rate/1000)
+    return (uint32_t)((uint64_t)ticks * 60u * sample_rate /
+                      ((uint32_t)bpm * ABC_PPQ));
+}
+
+uint16_t abc_note_duration_ms(const struct note *n, uint16_t bpm) {
+    return n ? ticks_to_ms(n->duration, bpm) : 0;
+}
+
+const char *abc_strerror(int code) {
+    switch (code) {
+        case  0: return "success";
+        case -1: return "invalid input";
+        case -2: return "note pool exhausted";
+        default: return "unknown error";
+    }
+}
+
+int abc_count_notes(const char *abc, uint16_t *per_voice_out, uint8_t max_voices) {
+    if (!abc || !per_voice_out || max_voices == 0) return -1;
+    if (max_voices > ABC_COUNT_MAX_VOICES) max_voices = ABC_COUNT_MAX_VOICES;
+
+    NotePool pools[ABC_COUNT_MAX_VOICES];
+    struct sheet sheet;
+
+    // NULL storage => count-only pools; capacity caps at the int16_t index space.
+    for (uint8_t i = 0; i < max_voices; i++) {
+        note_pool_init(&pools[i], NULL, 32767, ABC_MAX_CHORD_NOTES);
+    }
+    sheet_init(&sheet, pools, max_voices);
+
+    int rc = abc_parse(&sheet, abc);
+    if (rc < 0) return rc;
+
+    for (uint8_t i = 0; i < sheet.voice_count; i++) {
+        per_voice_out[i] = pools[i].count;
+    }
+    return sheet.voice_count;
+}
+
+// ============================================================================
 // Debug printing
 // ============================================================================
 
+#ifndef ABC_NO_PRINT
 void sheet_print(const struct sheet *sheet) {
     if (!sheet) { printf("(null sheet)\n"); return; }
 
@@ -926,3 +1062,4 @@ void sheet_print(const struct sheet *sheet) {
     }
     printf("==================================================\n");
 }
+#endif // ABC_NO_PRINT

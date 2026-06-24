@@ -909,6 +909,173 @@ TEST(voice_inline_whitespace) {
 }
 
 // ============================================================================
+// Quality-of-life API Tests
+// ============================================================================
+
+TEST(qol_storage_bytes) {
+    ASSERT_EQ(abc_storage_bytes(2, 64), 2 * 64 * (int)sizeof(struct note));
+    ASSERT_EQ(abc_storage_bytes(0, 64), 0);
+    return 1;
+}
+
+TEST(qol_sheet_setup) {
+    // One-shot setup over a single flat buffer + ABC_DEFINE_SHEET storage.
+    ABC_DEFINE_SHEET(s, 2, 32);
+    ASSERT_EQ(abc_sheet_setup(&s, s_pools, s_storage, 2, 32, ABC_MAX_CHORD_NOTES), 0);
+    ASSERT_EQ(s_pools[0].capacity, 32);
+    ASSERT_EQ(s_pools[1].capacity, 32);
+    // Pools must point at distinct, non-overlapping slices.
+    ASSERT(s_pools[1].notes == s_pools[0].notes + 32);
+    int rc = abc_parse(&s, "L:1/4\nK:C\nV:1\nC D\nV:2\nE\n");
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(s.voice_count, 2);
+    ASSERT_EQ(s_pools[0].count, 2);
+    ASSERT_EQ(s_pools[1].count, 1);
+    // Bad arguments rejected.
+    ASSERT_EQ(abc_sheet_setup(&s, s_pools, s_storage, 0, 32, 1), -1);
+    ASSERT_EQ(abc_sheet_setup(&s, s_pools, NULL, 2, 32, 1), -1);
+    return 1;
+}
+
+TEST(qol_note_is_rest) {
+    int result = abc_parse(&g_sheet, "K:C\nC z");
+    ASSERT_EQ(result, 0);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(abc_note_is_rest(n), 0);          // C is a note
+    ASSERT_EQ(abc_note_is_rest(note_next(&g_pools[0], n)), 1);  // z is a rest
+    ASSERT_EQ(abc_note_is_rest(NULL), 1);       // NULL treated as rest
+    return 1;
+}
+
+TEST(qol_note_frequency_x10) {
+    int result = abc_parse(&g_sheet, "K:C\nC z");
+    ASSERT_EQ(result, 0);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(abc_note_frequency_x10(n, 0), 2616);  // C4
+    ASSERT_EQ(abc_note_frequency_x10(n, 5), 0);     // out-of-range chord idx
+    ASSERT_EQ(abc_note_frequency_x10(note_next(&g_pools[0], n), 0), 0);  // rest -> 0
+    return 1;
+}
+
+TEST(qol_for_each_note) {
+    int result = abc_parse(&g_sheet, "K:C\nC D E F G");
+    ASSERT_EQ(result, 0);
+    int count = 0;
+    ABC_FOR_EACH_NOTE(n, &g_pools[0]) {
+        (void)n;
+        count++;
+    }
+    ASSERT_EQ(count, 5);
+    ASSERT_EQ(count, (int)g_pools[0].count);
+    return 1;
+}
+
+TEST(qol_for_each_chord_note) {
+    int result = abc_parse(&g_sheet, "K:C\n[CEG]");
+    ASSERT_EQ(result, 0);
+    struct note *n = sheet_first_note(&g_sheet);
+    int seen = 0;
+    ABC_FOR_EACH_CHORD_NOTE(i, n) {
+        ASSERT(n->midi_note[i] != 0);
+        seen++;
+    }
+    ASSERT_EQ(seen, 3);
+    return 1;
+}
+
+TEST(qol_iterator) {
+    int result = abc_parse(&g_sheet, "K:C\nC D E");
+    ASSERT_EQ(result, 0);
+    AbcNoteIter it;
+    abc_note_iter_init(&it, &g_pools[0], 0);
+    int count = 0;
+    while (abc_note_iter_next(&it)) count++;
+    ASSERT_EQ(count, 3);
+    ASSERT(abc_note_iter_next(&it) == NULL);  // stays exhausted without loop
+    return 1;
+}
+
+TEST(qol_iterator_loop) {
+    int result = abc_parse(&g_sheet, "K:C\nC D");
+    ASSERT_EQ(result, 0);
+    AbcNoteIter it;
+    abc_note_iter_init(&it, &g_pools[0], 1);  // loop = wrap
+    uint8_t midis[6];
+    for (int i = 0; i < 6; i++) midis[i] = abc_note_iter_next(&it)->midi_note[0];
+    ASSERT_EQ(midis[0], midis[2]);  // C
+    ASSERT_EQ(midis[2], midis[4]);
+    ASSERT_EQ(midis[1], midis[3]);  // D
+    return 1;
+}
+
+TEST(qol_sheet_voice) {
+    int result = abc_parse(&g_sheet, "K:C\nV:LEAD\nC\nV:BASS\nC,\n");
+    ASSERT_EQ(result, 0);
+    ASSERT(abc_sheet_voice(&g_sheet, 0) == &g_pools[0]);
+    ASSERT(abc_sheet_voice(&g_sheet, 1) == &g_pools[1]);
+    ASSERT(abc_sheet_voice(&g_sheet, 2) == NULL);   // beyond voice_count
+    ASSERT(abc_sheet_voice(NULL, 0) == NULL);
+    return 1;
+}
+
+TEST(qol_ticks_to_samples) {
+    // 48 ticks (1 quarter @ PPQ=48) at 120 BPM = 500 ms = 11025 samples @ 22050 Hz
+    ASSERT_EQ(abc_ticks_to_samples(48, 120, 22050), 11025);
+    ASSERT_EQ(abc_ticks_to_samples(48, 0, 22050), 11025);  // bpm 0 defaults to 120
+    return 1;
+}
+
+TEST(qol_note_duration_ms) {
+    int result = abc_parse(&g_sheet, "L:1/4\nQ:1/4=120\nK:C\nC");
+    ASSERT_EQ(result, 0);
+    struct note *n = sheet_first_note(&g_sheet);
+    ASSERT_EQ(abc_note_duration_ms(n, g_sheet.tempo_bpm),
+              ticks_to_ms(n->duration, g_sheet.tempo_bpm));
+    ASSERT_EQ(abc_note_duration_ms(NULL, 120), 0);
+    return 1;
+}
+
+TEST(qol_strerror) {
+    ASSERT(strcmp(abc_strerror(0), "success") == 0);
+    ASSERT(strcmp(abc_strerror(-1), "invalid input") == 0);
+    ASSERT(strcmp(abc_strerror(-2), "note pool exhausted") == 0);
+    ASSERT(abc_strerror(42) != NULL);  // unknown still returns a string
+    return 1;
+}
+
+TEST(qol_count_notes_matches_parse) {
+    // Repeat must be counted as expanded: |:C D:| => 4 notes.
+    const char *music = "K:C\n|:C D:| E";
+    uint16_t counts[2] = {0, 0};
+    int voices = abc_count_notes(music, counts, 2);
+    ASSERT_EQ(voices, 1);
+    ASSERT_EQ(counts[0], 5);  // (C D)*2 + E
+    // Dry-run prediction must match a real parse.
+    int rc = abc_parse(&g_sheet, music);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(g_pools[0].count, counts[0]);
+    return 1;
+}
+
+TEST(qol_count_notes_multivoice) {
+    const char *music = "L:1/4\nK:C\nV:1\nC D E\nV:2\nG A\n";
+    uint16_t counts[2] = {0, 0};
+    int voices = abc_count_notes(music, counts, 2);
+    ASSERT_EQ(voices, 2);
+    ASSERT_EQ(counts[0], 3);
+    ASSERT_EQ(counts[1], 2);
+    return 1;
+}
+
+TEST(qol_count_notes_bad_args) {
+    uint16_t counts[2];
+    ASSERT_EQ(abc_count_notes(NULL, counts, 2), -1);
+    ASSERT_EQ(abc_count_notes("C D", NULL, 2), -1);
+    ASSERT_EQ(abc_count_notes("C D", counts, 0), -1);
+    return 1;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1035,6 +1202,23 @@ int main(void) {
     RUN_TEST(voice_continuation);
     RUN_TEST(voice_without_key);
     RUN_TEST(voice_inline_whitespace);
+
+    printf("\nQuality-of-life API Tests:\n");
+    RUN_TEST(qol_storage_bytes);
+    RUN_TEST(qol_sheet_setup);
+    RUN_TEST(qol_note_is_rest);
+    RUN_TEST(qol_note_frequency_x10);
+    RUN_TEST(qol_for_each_note);
+    RUN_TEST(qol_for_each_chord_note);
+    RUN_TEST(qol_iterator);
+    RUN_TEST(qol_iterator_loop);
+    RUN_TEST(qol_sheet_voice);
+    RUN_TEST(qol_ticks_to_samples);
+    RUN_TEST(qol_note_duration_ms);
+    RUN_TEST(qol_strerror);
+    RUN_TEST(qol_count_notes_matches_parse);
+    RUN_TEST(qol_count_notes_multivoice);
+    RUN_TEST(qol_count_notes_bad_args);
 
     printf("\n=====================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

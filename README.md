@@ -14,7 +14,7 @@ A lightweight, embedded-friendly parser for ABC music notation written in C99. P
 - **Repeat unfolding** - `|: ... :|` sections are expanded inline
 - **Key signature support** - major and minor keys with correct accidentals
 - **Tempo with note value** - `Q:1/4=120` (quarter=120) or `Q:1/8=120` (eighth=120)
-- **Embedded-ready** - no stdlib dependencies except `<string.h>` and `<stdint.h>`
+- **Embedded-ready** - core needs only `<string.h>`, `<stdint.h>`, `<stddef.h>`; floating-point and `stdio` are isolated and can be compiled out (see [Configuration](#configuration))
 
 ## Memory Usage
 
@@ -94,6 +94,41 @@ int main(void) {
 
     return 0;
 }
+```
+
+### Convenience setup & iteration
+
+The same program with the quality-of-life helpers — one `ABC_DEFINE_SHEET` for
+storage, one `abc_sheet_setup` to wire it up, and `ABC_FOR_EACH_NOTE` to walk it:
+
+```c
+#include "abc_parser.h"
+
+// Declares g_pools, g_storage and g (one flat note buffer).
+ABC_DEFINE_SHEET(g, 2, 128);
+
+int main(void) {
+    abc_sheet_setup(&g, g_pools, g_storage, 2, 128, ABC_MAX_CHORD_NOTES);
+
+    if (abc_parse(&g, "L:1/4\nK:C\nC D E F | G A B c |") < 0) return 1;
+
+    ABC_FOR_EACH_NOTE(n, abc_sheet_voice(&g, 0)) {
+        if (abc_note_is_rest(n)) continue;
+        uint16_t freq_x10 = abc_note_frequency_x10(n, 0);          // 0 for rest/oob
+        uint16_t ms       = abc_note_duration_ms(n, g.tempo_bpm);  // duration in ms
+        // ... feed your synth ...
+        (void)freq_x10; (void)ms;
+    }
+    return 0;
+}
+```
+
+Need to size buffers before allocating? `abc_count_notes()` does a dry run
+(repeats expanded, no storage written) so you can right-size each voice:
+
+```c
+uint16_t per_voice[4];
+int voices = abc_count_notes(abc_string, per_voice, 4);  // returns voice count
 ```
 
 ### Multi-Voice
@@ -221,6 +256,50 @@ Compile-time defines in `abc_parser.h` (affects struct sizes):
 #define ABC_MAX_KEY_LEN       8  // Key string buffer
 #define ABC_MAX_VOICE_ID_LEN 16  // Voice ID string buffer
 #define ABC_PPQ              48  // Pulses per quarter note (MIDI ticks)
+#define ABC_COUNT_MAX_VOICES  8  // Max voices abc_count_notes() can tally
+```
+
+Build-mode switches (both default to current behavior, so existing builds are
+unaffected):
+
+```c
+#define ABC_NO_FLOAT  // Exclude all floating-point helpers (note_to_frequency,
+                      // abc_midi_to_frequency, abc_note_frequency). The integer
+                      // core (midi_to_frequency_x10, *_x10 helpers) is unaffected.
+#define ABC_NO_PRINT  // Exclude sheet_print(). It is the only user of <stdio.h>.
+```
+
+Defining **both** yields a freestanding build that needs only `<stdint.h>`,
+`<stddef.h>` and `<string.h>` — no FPU, no `stdio`.
+
+Score defaults (applied only when the matching ABC header is **absent**). These
+default to ABC-standard behavior; override at build time to match your project's
+conventions:
+
+```c
+#define ABC_DEFAULT_TEMPO_BPM       120  // Tempo when Q: is absent
+#define ABC_DEFAULT_METER_NUM         4  // Meter numerator when M: is absent
+#define ABC_DEFAULT_METER_DEN         4  // Meter denominator when M: is absent
+#define ABC_DEFAULT_KEY             "C"  // Key signature when K: is absent
+#define ABC_DERIVE_LENGTH_FROM_METER  1  // When L: absent: 1 = derive from meter
+                                         //   (<3/4 -> 1/16, else 1/8, ABC standard)
+                                         //   0 = use the fixed default below
+#define ABC_DEFAULT_NOTE_NUM          1  // Unit note length numerator when L: absent
+#define ABC_DEFAULT_NOTE_DEN          4  // Unit note length denominator when L: absent
+```
+
+For example, to keep a fixed `L:1/4` and `Q:100` for headerless tunes:
+`-DABC_DEFAULT_TEMPO_BPM=100 -DABC_DERIVE_LENGTH_FROM_METER=0`.
+
+If you would rather not pass `-D` flags, drop an **`abc_config.h`** anywhere on
+the include path with your overrides — `abc_parser.h` auto-includes it (via
+`__has_include`) when present, and ignores it otherwise. Standalone builds that
+don't ship the file keep the ABC-standard defaults:
+
+```c
+// abc_config.h
+#define ABC_DEFAULT_TEMPO_BPM 100
+#define ABC_DERIVE_LENGTH_FROM_METER 0
 ```
 
 Runtime parameters (passed to `note_pool_init()`):
@@ -270,6 +349,17 @@ void sheet_init(struct sheet *s, NotePool *pools, uint8_t pool_count);
 
 // Reset for reuse (clears all pools)
 void sheet_reset(struct sheet *s);
+
+// One-shot: slice one flat buffer into `voices` equal pools + init the sheet.
+// Returns 0 on success, -1 on bad arguments.
+int abc_sheet_setup(struct sheet *s, NotePool *pools, struct note *buffer,
+                    uint8_t voices, uint16_t notes_per_voice, uint8_t max_chord_notes);
+
+// Bytes of note storage needed to back `voices` pools of `notes_per_voice`.
+size_t abc_storage_bytes(uint8_t voices, uint16_t notes_per_voice);
+
+// Declare static g_pools / g_storage / sheet for the common static case:
+//   ABC_DEFINE_SHEET(name, VOICES, NOTES_PER_VOICE);
 ```
 
 ### Parsing
@@ -286,22 +376,57 @@ struct note *sheet_first_note(const struct sheet *s);              // First note
 struct note *pool_first_note(const NotePool *pool);                // First note in pool
 struct note *note_next(const NotePool *pool, const struct note *n); // Next note
 struct note *note_get(const NotePool *pool, int index);            // Note by index
+
+NotePool    *abc_sheet_voice(const struct sheet *s, uint8_t i);    // Bounds-checked voice (NULL if oob)
+
+// Zero-cost loop macros
+ABC_FOR_EACH_NOTE(n, pool)        // for each note in a pool
+ABC_FOR_EACH_CHORD_NOTE(i, n)     // for each chord member index in a note
+
+// Resumable iterator (for suspended cursors such as per-voice playback state)
+typedef struct { const NotePool *pool; struct note *cur; uint8_t loop; } AbcNoteIter;
+void         abc_note_iter_init(AbcNoteIter *it, const NotePool *pool, uint8_t loop);
+struct note *abc_note_iter_next(AbcNoteIter *it);  // returns note then advances; wraps if loop
+```
+
+### Note inspection
+
+```c
+int      abc_note_is_rest(const struct note *n);                      // 1 if rest/empty
+uint16_t abc_note_frequency_x10(const struct note *n, uint8_t chord_idx); // 0 for rest/oob
 ```
 
 ### MIDI Conversion (compute note properties from stored MIDI)
 
 ```c
-uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10 in Hz
+uint16_t midi_to_frequency_x10(uint8_t midi);  // Returns frequency * 10 in Hz (canonical, integer)
 NoteName midi_to_note_name(uint8_t midi);       // Returns note name (C, D, E, etc.)
 uint8_t midi_to_octave(uint8_t midi);           // Returns octave (0-10)
 int midi_is_rest(uint8_t midi);                 // Returns 1 if rest (midi == 0)
+
+// Float conveniences (compiled out under ABC_NO_FLOAT)
+float abc_midi_to_frequency(uint8_t midi);                  // Hz
+float abc_note_frequency(const struct note *n, uint8_t i);  // Hz, 0.0f for rest/oob
 ```
 
 ### Duration Conversion
 
 ```c
-uint16_t ticks_to_ms(uint8_t ticks, uint16_t bpm);       // Convert ticks to milliseconds
-uint32_t pool_total_ms(const NotePool *pool, uint16_t bpm); // Total pool duration in ms
+uint16_t ticks_to_ms(uint8_t ticks, uint16_t bpm);          // Convert ticks to milliseconds
+uint32_t pool_total_ms(const NotePool *pool, uint16_t bpm);   // Total pool duration in ms
+uint16_t abc_note_duration_ms(const struct note *n, uint16_t bpm); // Note duration in ms
+uint32_t abc_ticks_to_samples(uint8_t ticks, uint16_t bpm, uint32_t sample_rate); // Ticks -> samples
+```
+
+### Errors & sizing
+
+```c
+const char *abc_strerror(int code);  // Human-readable string for an abc_parse() code
+
+// Dry-run note counter: parses without writing pools so you can size storage.
+// Writes up to max_voices counts into per_voice_out, returns the voice count
+// (clamped to ABC_COUNT_MAX_VOICES), or negative on error.
+int abc_count_notes(const char *abc, uint16_t *per_voice_out, uint8_t max_voices);
 ```
 
 ### Other Utilities
@@ -331,7 +456,7 @@ ctest
 ./test_parser
 ```
 
-72 tests covering notes, octaves, accidentals, durations, tuplets, rests, key signatures, header fields, repeats, frequencies, MIDI notes, chords, and voices.
+Tests cover notes, octaves, accidentals, durations, tuplets, rests, key signatures, header fields, repeats, frequencies, MIDI notes, chords, voices, and the quality-of-life API (setup, iteration, inspection, duration/sample conversion, error strings, and the `abc_count_notes` dry run).
 
 ## License
 
