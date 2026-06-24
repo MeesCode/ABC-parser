@@ -1076,6 +1076,146 @@ TEST(qol_count_notes_bad_args) {
 }
 
 // ============================================================================
+// Spec Coverage Tests (broken rhythm, grace, ties, modes, inline fields, endings)
+// ============================================================================
+
+TEST(broken_rhythm_gt) {
+    // D2>E2 at L:1/16: D2=24 -> dotted x3/2 = 36; E2=24 -> cut x1/2 = 12
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/16\nK:C\nD2>E2"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 2);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration, 36);
+    ASSERT_EQ(note_get(&g_pools[0], 1)->duration, 12);
+    return 1;
+}
+
+TEST(broken_rhythm_lt) {
+    // G2<C2: G cut to 12, C dotted to 36
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/16\nK:C\nG2<C2"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration, 12);
+    ASSERT_EQ(note_get(&g_pools[0], 1)->duration, 36);
+    return 1;
+}
+
+TEST(broken_rhythm_preserves_total) {
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/16\nK:C\nD2>E2"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration + note_get(&g_pools[0], 1)->duration, 48);
+    return 1;
+}
+
+TEST(broken_rhythm_double) {
+    // D2>>E2: x7/4 = 42, x1/4 = 6
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/16\nK:C\nD2>>E2"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration, 42);
+    ASSERT_EQ(note_get(&g_pools[0], 1)->duration, 6);
+    return 1;
+}
+
+TEST(grace_steals_from_principal) {
+    // {d}f4 at L:1/16: f4 base=48; grace d=ABC_GRACE_NOTE_TICKS; principal=48-that
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/16\nK:C\n{d}f4"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 2);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration, ABC_GRACE_NOTE_TICKS);
+    ASSERT_EQ(note_get(&g_pools[0], 1)->duration, 48 - ABC_GRACE_NOTE_TICKS);
+    ASSERT_EQ(TOTAL_TICKS(), 48);  // bar length preserved
+    return 1;
+}
+
+TEST(grace_multiple) {
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/8\nK:C\n{ge}d2"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 3);
+    ASSERT_EQ(TOTAL_TICKS(), 48);  // d2 base fully conserved
+    return 1;
+}
+
+TEST(tie_same_pitch_merges) {
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/8\nK:C\nA-A"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 1);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration, 48);  // 24 + 24
+    return 1;
+}
+
+TEST(tie_different_pitch_kept) {
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/8\nK:C\nA-B"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 2);
+    return 1;
+}
+
+TEST(mode_dorian) {
+    // A Dorian = 1 sharp (F#). F4 -> F#4 = 66
+    ASSERT_EQ(abc_parse(&g_sheet, "K:Ador\nL:1/8\nF"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->midi_note[0], 66);
+    return 1;
+}
+
+TEST(mode_mixolydian) {
+    // G Mixolydian = no accidentals (F natural). F4 = 65
+    ASSERT_EQ(abc_parse(&g_sheet, "K:Gmix\nL:1/8\nF"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->midi_note[0], 65);
+    return 1;
+}
+
+TEST(mode_minor_still_works) {
+    // D minor = Bb. B4 -> Bb4 = 70
+    ASSERT_EQ(abc_parse(&g_sheet, "K:Dm\nL:1/8\nB"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->midi_note[0], 70);
+    return 1;
+}
+
+TEST(inline_key_change) {
+    // F natural, then [K:G] makes the next F an F#
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/8\nK:C\nF[K:G]F"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 2);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->midi_note[0], 65);  // F natural
+    ASSERT_EQ(note_get(&g_pools[0], 1)->midi_note[0], 66);  // F#
+    return 1;
+}
+
+TEST(inline_length_change) {
+    // L:1/4 then inline [L:1/8] halves the next note's length
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/4\nK:C\nC[L:1/8]C"), 0);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->duration, 48);  // 1/4
+    ASSERT_EQ(note_get(&g_pools[0], 1)->duration, 24);  // 1/8
+    return 1;
+}
+
+TEST(endings_pipe_form) {
+    // |:C|1D:|2E|  unfolds to C D C E
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/8\nK:C\n|:C|1D:|2E|"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 4);
+    ASSERT_EQ(note_get(&g_pools[0], 0)->midi_note[0], 60);  // C
+    ASSERT_EQ(note_get(&g_pools[0], 1)->midi_note[0], 62);  // D (1st ending)
+    ASSERT_EQ(note_get(&g_pools[0], 2)->midi_note[0], 60);  // C (repeat)
+    ASSERT_EQ(note_get(&g_pools[0], 3)->midi_note[0], 64);  // E (2nd ending)
+    return 1;
+}
+
+TEST(endings_bracket_form) {
+    // |:C[1D:|[2E|  same unfold C D C E
+    ASSERT_EQ(abc_parse(&g_sheet, "L:1/8\nK:C\n|:C[1D:|[2E|"), 0);
+    ASSERT_EQ(NOTE_COUNT(), 4);
+    ASSERT_EQ(note_get(&g_pools[0], 3)->midi_note[0], 64);
+    return 1;
+}
+
+TEST(caerketton_strathspey) {
+    // Real-world strathspey: heavy broken rhythm, grace notes, chord-symbol
+    // annotations, repeats. Must parse and conserve every bar's length.
+    const char *tune =
+        "X:2399\nT:Caerketton\nT:AA BB\nR:strathspey\nC:Iain Robertson\n"
+        "M:4/4\nL:1/16\nK:Dm\n"
+        "\"A\"|:\"Dm\"A,4 D2>E2 F2>G2 A4 | \"C\"G2<C2 C4 G2<C2 C4 | "
+        "\"Dm\"A,4 D2>E2 F2>G2 A4 | \"Am7\"{d}f4 A,3B,/C/ \"Dm\"D8 :|\n"
+        "\"B\"|:\"F\"F4 F2>G2 A2<c2 f4 | \"C7\" c2<C2 C4 c2<C2 C4 | "
+        "\"Dm\"D4 F2>G2 A4 d2<d2 | \"Am7\"{d}a4 A,3B,/C/ \"Dm\"D8 :|\n";
+    ASSERT_EQ(abc_parse(&g_sheet, tune), 0);
+    ASSERT_EQ(g_sheet.voice_count, 1);
+    ASSERT(strcmp(g_sheet.key, "Dm") == 0);
+    // 2 sections x 4 bars, each repeated = 16 bars of 4/4 = 16 * 192 ticks.
+    ASSERT_EQ(TOTAL_TICKS(), 16 * 192);
+    return 1;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1219,6 +1359,24 @@ int main(void) {
     RUN_TEST(qol_count_notes_matches_parse);
     RUN_TEST(qol_count_notes_multivoice);
     RUN_TEST(qol_count_notes_bad_args);
+
+    printf("\nSpec Coverage Tests:\n");
+    RUN_TEST(broken_rhythm_gt);
+    RUN_TEST(broken_rhythm_lt);
+    RUN_TEST(broken_rhythm_preserves_total);
+    RUN_TEST(broken_rhythm_double);
+    RUN_TEST(grace_steals_from_principal);
+    RUN_TEST(grace_multiple);
+    RUN_TEST(tie_same_pitch_merges);
+    RUN_TEST(tie_different_pitch_kept);
+    RUN_TEST(mode_dorian);
+    RUN_TEST(mode_mixolydian);
+    RUN_TEST(mode_minor_still_works);
+    RUN_TEST(inline_key_change);
+    RUN_TEST(inline_length_change);
+    RUN_TEST(endings_pipe_form);
+    RUN_TEST(endings_bracket_form);
+    RUN_TEST(caerketton_strathspey);
 
     printf("\n=====================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

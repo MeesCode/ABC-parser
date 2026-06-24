@@ -71,6 +71,14 @@ extern "C" {
 #define ABC_COUNT_MAX_VOICES 8     // Max voices abc_count_notes() can tally (stack pools)
 #endif
 
+#ifndef ABC_GRACE_MAX
+#define ABC_GRACE_MAX 4            // Max grace notes buffered per {..} group
+#endif
+
+#ifndef ABC_GRACE_NOTE_TICKS
+#define ABC_GRACE_NOTE_TICKS (ABC_PPQ / 8)  // Length of one grace note (1/32), stolen from the principal
+#endif
+
 // ----------------------------------------------------------------------------
 // Score defaults - values applied when the matching ABC header is absent.
 // Override at build time (e.g. -DABC_DEFAULT_TEMPO_BPM=100) to match a host

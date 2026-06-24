@@ -208,9 +208,19 @@ note_pool_init(&complex_pool, complex_storage, 1024, 4);  // 1024 notes, up to 4
 | Rests | `z` or `Z` | `z2` (rest, double length) |
 | Chords | `[notes]` | `[CEG]` (C major chord) |
 | Tuplets | `(n` before notes | `(3CDE` (triplet), `(2CD` (duplet) |
+| Broken rhythm | `>` / `<` between notes | `a>b` (a dotted, b cut), `a<b` (reverse) |
+| Grace notes | `{notes}` before a note | `{d}f` (d ornaments f, stealing a little time) |
+| Ties | `-` between same pitch | `a-a` (held as one note) |
 | Voices | `V:id` | `V:MELODY`, `V:BASS` |
 | Repeats | `\|: ... :\|` | `\|:C D E F:\|` |
+| Endings | `\|1 ... :\|2 ...` or `[1 ... :\|[2 ...` | first/second-time bars (unfolded) |
+| Inline fields | `[X:...]` mid-tune | `[K:G]`, `[M:3/4]`, `[L:1/8]`, `[Q:120]`, `[V:2]` |
 | Bar lines | `\|`, `\|\|`, `\|]` | `C D \| E F` |
+
+Broken rhythm and grace notes are tempo-independent and conserve the bar's total
+duration (grace notes steal `ABC_GRACE_NOTE_TICKS` from the following note; see
+[Configuration](#configuration)). Numbered endings are unfolded inline like
+repeats, so the note stream plays straight through.
 
 ### Tuplet Reference
 
@@ -233,8 +243,18 @@ note_pool_init(&complex_pool, complex_storage, 1024, 4);  // 1024 notes, up to 4
 | `M:` | Meter | `M:4/4` |
 | `L:` | Default note length | `L:1/8` |
 | `Q:` | Tempo (BPM) | `Q:120` or `Q:1/4=120` |
-| `K:` | Key signature | `K:G`, `K:Amin`, `K:Bb` |
+| `K:` | Key signature | `K:G`, `K:Amin`, `K:Bb`, `K:Ador` |
 | `V:` | Voice | `V:MELODY` |
+
+Header fields may also appear **inline** mid-tune as `[K:G]`, `[M:3/4]`,
+`[L:1/8]`, `[Q:120]` or `[V:2]`.
+
+### Key Signatures
+
+Key signatures are computed from the circle of fifths, so any tonic (`A`–`G`
+with optional `#`/`b`) and any church mode is accepted: major/Ionian (default),
+minor (`m`/`min`/Aeolian), Dorian (`dor`), Mixolydian (`mix`), Phrygian (`phr`),
+Lydian (`lyd`) and Locrian (`loc`) — e.g. `K:Bb`, `K:F#m`, `K:Ador`, `K:Emix`.
 
 ### Tempo Note Values
 
@@ -257,6 +277,8 @@ Compile-time defines in `abc_parser.h` (affects struct sizes):
 #define ABC_MAX_VOICE_ID_LEN 16  // Voice ID string buffer
 #define ABC_PPQ              48  // Pulses per quarter note (MIDI ticks)
 #define ABC_COUNT_MAX_VOICES  8  // Max voices abc_count_notes() can tally
+#define ABC_GRACE_MAX         4  // Max grace notes buffered per {..} group
+#define ABC_GRACE_NOTE_TICKS  6  // Ticks per grace note (1/32), stolen from the principal
 ```
 
 Build-mode switches (both default to current behavior, so existing builds are
@@ -456,7 +478,7 @@ ctest
 ./test_parser
 ```
 
-Tests cover notes, octaves, accidentals, durations, tuplets, rests, key signatures, header fields, repeats, frequencies, MIDI notes, chords, voices, and the quality-of-life API (setup, iteration, inspection, duration/sample conversion, error strings, and the `abc_count_notes` dry run).
+Tests cover notes, octaves, accidentals, durations, tuplets, rests, key signatures, header fields, repeats, frequencies, MIDI notes, chords, voices, the quality-of-life API (setup, iteration, inspection, duration/sample conversion, error strings, and the `abc_count_notes` dry run), and spec coverage (broken rhythm, grace notes, ties, modal keys, inline fields, numbered endings, plus a real-world strathspey integration test).
 
 ## License
 

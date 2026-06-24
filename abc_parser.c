@@ -40,43 +40,21 @@ static const int8_t note_to_semitone[7] = { 0, 2, 4, 5, 7, 9, 11 };
 // ============================================================================
 // Key signature data
 // ============================================================================
+//
+// Key signatures are computed from the circle of fifths rather than tabulated,
+// so every tonic, accidental and church mode is supported (major/Ionian, minor/
+// Aeolian, Dorian, Mixolydian, Phrygian, Lydian, Locrian).
+//
+//   fifths = sharps in the *major* key of the tonic, then offset by the mode.
+//   A positive count adds sharps in the order F C G D A E B; a negative count
+//   adds flats in the order B E A D G C F.
 
-typedef struct {
-    const char *name;
-    int8_t accidentals[7]; // Accidentals for C, D, E, F, G, A, B
-} KeySignature;
+// Sharps in the major key of each natural tonic (C D E F G A B order).
+static const int8_t major_fifths[7] = { 0, 2, 4, -1, 1, 3, 5 };
 
-static const KeySignature key_signatures[] = {
-    {"C",    {0, 0, 0, 0, 0, 0, 0}},
-    {"G",    {0, 0, 0, 1, 0, 0, 0}},
-    {"D",    {1, 0, 0, 1, 0, 0, 0}},
-    {"A",    {1, 0, 0, 1, 1, 0, 0}},
-    {"E",    {1, 1, 0, 1, 1, 0, 0}},
-    {"B",    {1, 1, 0, 1, 1, 1, 0}},
-    {"F#",   {1, 1, 1, 1, 1, 1, 0}},
-    {"F",    {0, 0, 0, 0, 0, 0,-1}},
-    {"Bb",   {0, 0,-1, 0, 0, 0,-1}},
-    {"Eb",   {0, 0,-1, 0, 0,-1,-1}},
-    {"Ab",   {0,-1,-1, 0, 0,-1,-1}},
-    {"Db",   {0,-1,-1, 0,-1,-1,-1}},
-    {"Am",   {0, 0, 0, 0, 0, 0, 0}},
-    {"Amin", {0, 0, 0, 0, 0, 0, 0}},
-    {"Em",   {0, 0, 0, 1, 0, 0, 0}},
-    {"Emin", {0, 0, 0, 1, 0, 0, 0}},
-    {"Bm",   {1, 0, 0, 1, 0, 0, 0}},
-    {"Bmin", {1, 0, 0, 1, 0, 0, 0}},
-    {"F#m",  {1, 0, 0, 1, 1, 0, 0}},
-    {"F#min",{1, 0, 0, 1, 1, 0, 0}},
-    {"Dm",   {0, 0, 0, 0, 0, 0,-1}},
-    {"Dmin", {0, 0, 0, 0, 0, 0,-1}},
-    {"Gm",   {0, 0,-1, 0, 0, 0,-1}},
-    {"Gmin", {0, 0,-1, 0, 0, 0,-1}},
-    {"Cm",   {0, 0,-1, 0, 0,-1,-1}},
-    {"Cmin", {0, 0,-1, 0, 0,-1,-1}},
-    {"Fm",   {0,-1,-1, 0, 0,-1,-1}},
-    {"Fmin", {0,-1,-1, 0, 0,-1,-1}},
-    {NULL, {0}}
-};
+// Note indices (NoteName order) for applying accidentals along the circle.
+static const uint8_t sharp_order[7] = { 3, 0, 4, 1, 5, 2, 6 }; // F C G D A E B
+static const uint8_t flat_order[7]  = { 6, 2, 5, 1, 4, 0, 3 }; // B E A D G C F
 
 // ============================================================================
 // Parser state (stack allocated during parsing)
@@ -97,11 +75,18 @@ typedef struct {
     int8_t bar_accidentals[7];
     int16_t repeat_start_index;
     int16_t repeat_end_index;
+    int16_t ending_start_index;  // pool index where the 1st numbered ending began (-1 = none)
     uint8_t in_repeat;
     uint8_t tuplet_remaining;
     uint8_t tuplet_num;
     uint8_t tuplet_in_time;
     uint8_t current_voice;       // Current voice index
+    int8_t  broken_rhythm;       // pending broken rhythm: +n for n '>', -n for n '<' (0 = none)
+    uint8_t tie_pending;         // a '-' tie awaits the next note
+    uint8_t grace_count;         // grace notes buffered from a {..} group
+    NoteName grace_names[ABC_GRACE_MAX];
+    int      grace_octaves[ABC_GRACE_MAX];
+    int8_t   grace_accs[ABC_GRACE_MAX];
     uint8_t has_explicit_L;      // L: field was explicitly set
     uint8_t has_explicit_K;      // K: field was explicitly set
     uint8_t has_explicit_Q_note; // Q: field had explicit note value (e.g. Q:1/4=120 vs Q:120)
@@ -374,14 +359,50 @@ static uint8_t calculate_duration_ticks(ParserState *s, int num, int den) {
     return (uint8_t)duration;
 }
 
+static inline char abc_lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+// Parse a K: value (tonic [#/b] [mode]) and fill key_accidentals from the
+// circle of fifths. Unknown/none keys yield no accidentals.
 static void set_key_signature(ParserState *s, const char *key) {
-    for (int i = 0; key_signatures[i].name; i++) {
-        if (strcmp(key_signatures[i].name, key) == 0) {
-            memcpy(s->key_accidentals, key_signatures[i].accidentals, 7);
-            return;
-        }
-    }
     memset(s->key_accidentals, 0, 7);
+    if (!key || !key[0]) return;
+
+    const char *p = key;
+    while (*p == ' ' || *p == '\t') p++;
+
+    int tonic = -1;
+    if (*p >= 'A' && *p <= 'G') tonic = (*p - 'A' + 5) % 7;       // -> NoteName index
+    else if (*p >= 'a' && *p <= 'g') tonic = (*p - 'a' + 5) % 7;
+    if (tonic < 0) return;  // K:none, K:HP, etc.
+    p++;
+
+    int fifths = major_fifths[tonic];
+    if (*p == '#') { fifths += 7; p++; }
+    else if (*p == 'b') { fifths -= 7; p++; }
+
+    while (*p == ' ') p++;
+
+    // Mode suffix (case-insensitive, first 3 letters; bare 'm' = minor).
+    char m0 = p[0] ? abc_lower(p[0]) : 0;
+    char m1 = (m0 && p[1]) ? abc_lower(p[1]) : 0;
+    char m2 = (m1 && p[2]) ? abc_lower(p[2]) : 0;
+    if      (m0=='m' && m1=='a' && m2=='j') fifths += 0;   // major
+    else if (m0=='i' && m1=='o' && m2=='n') fifths += 0;   // Ionian
+    else if (m0=='m' && m1=='i' && m2=='x') fifths += -1;  // Mixolydian
+    else if (m0=='m' && m1=='i' && m2=='n') fifths += -3;  // minor
+    else if (m0=='a' && m1=='e' && m2=='o') fifths += -3;  // Aeolian
+    else if (m0=='d' && m1=='o' && m2=='r') fifths += -2;  // Dorian
+    else if (m0=='p' && m1=='h' && m2=='r') fifths += -4;  // Phrygian
+    else if (m0=='l' && m1=='y' && m2=='d') fifths += +1;  // Lydian
+    else if (m0=='l' && m1=='o' && m2=='c') fifths += -5;  // Locrian
+    else if (m0=='m')                       fifths += -3;  // bare 'm' = minor
+
+    if (fifths > 7) fifths = 7;
+    if (fifths < -7) fifths = -7;
+    if (fifths > 0) for (int i = 0; i < fifths; i++) s->key_accidentals[sharp_order[i]] = ACC_SHARP;
+    else for (int i = 0; i < -fifths; i++) s->key_accidentals[flat_order[i]] = ACC_FLAT;
 }
 
 static void safe_strcpy(char *dest, uint8_t dest_size, const char *src, uint8_t src_len) {
@@ -411,6 +432,104 @@ static int find_or_create_voice(struct sheet *sheet, const char *voice_id, uint8
     return -1; // No space for more voices
 }
 
+// Forward declaration (defined with the note-parsing helpers below).
+static int copy_repeat_section(NotePool *pool, int16_t start_idx, int16_t end_idx);
+
+// Apply one information field (used by both the header parser and inline
+// [X:...] fields). Handles T, C, L, M, Q, K; ignores X and unknown fields.
+// Voice (V) is handled by the callers since it affects parse control flow.
+static void apply_field_value(ParserState *s, struct sheet *sheet, char field,
+                              const char *val, uint8_t vlen) {
+    switch (field) {
+        case 'T': safe_strcpy(sheet->title, ABC_MAX_TITLE_LEN, val, vlen); break;
+        case 'C': safe_strcpy(sheet->composer, ABC_MAX_COMPOSER_LEN, val, vlen); break;
+        case 'L': {
+            int num = 0, den = 0;
+            uint8_t i = 0;
+            while (i < vlen && val[i] >= '0' && val[i] <= '9') num = num * 10 + (val[i++] - '0');
+            if (i < vlen && val[i] == '/') {
+                i++;
+                while (i < vlen && val[i] >= '0' && val[i] <= '9') den = den * 10 + (val[i++] - '0');
+            }
+            if (num > 0 && den > 0) {
+                s->default_num = sheet->default_note_num = (uint8_t)num;
+                s->default_den = sheet->default_note_den = (uint8_t)den;
+                s->has_explicit_L = 1;
+            }
+            break;
+        }
+        case 'M': {
+            int num = 0, den = 0;
+            uint8_t i = 0;
+            while (i < vlen && val[i] >= '0' && val[i] <= '9') num = num * 10 + (val[i++] - '0');
+            if (i < vlen && val[i] == '/') {
+                i++;
+                while (i < vlen && val[i] >= '0' && val[i] <= '9') den = den * 10 + (val[i++] - '0');
+            }
+            if (num > 0 && den > 0) {
+                s->meter_num = sheet->meter_num = (uint8_t)num;
+                s->meter_den = sheet->meter_den = (uint8_t)den;
+            }
+            break;
+        }
+        case 'Q': {
+            int tempo = 0, note_num = 0, note_den = 0;
+            uint8_t i = 0;
+            uint8_t eq_pos = 0;
+            for (uint8_t j = 0; j < vlen; j++) {
+                if (val[j] == '=') { eq_pos = j + 1; break; }
+            }
+            if (eq_pos > 0) {
+                while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
+                    note_num = note_num * 10 + (val[i++] - '0');
+                }
+                if (i < eq_pos - 1 && val[i] == '/') {
+                    i++;
+                    while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
+                        note_den = note_den * 10 + (val[i++] - '0');
+                    }
+                }
+                if (note_num > 0 && note_den > 0) {
+                    s->tempo_note_num = sheet->tempo_note_num = (uint8_t)note_num;
+                    s->tempo_note_den = sheet->tempo_note_den = (uint8_t)note_den;
+                    s->has_explicit_Q_note = 1;
+                }
+            }
+            i = eq_pos;
+            while (i < vlen && val[i] >= '0' && val[i] <= '9') {
+                tempo = tempo * 10 + (val[i++] - '0');
+            }
+            if (tempo > 0) s->tempo_bpm = sheet->tempo_bpm = (uint16_t)tempo;
+            break;
+        }
+        case 'K':
+            safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, val, vlen);
+            set_key_signature(s, sheet->key);
+            s->has_explicit_K = 1;
+            break;
+        default: break;  // X and unknown fields ignored
+    }
+}
+
+// Replay the common part of a repeat on entering a numbered ending.
+//   '1' : mark where the 1st ending begins (the common part precedes it).
+//   '2'+: a later ending begins; replay [repeat_start, ending_start) once so the
+//         unfolded stream reads common, 1st-ending, common, 2nd-ending.
+static int handle_ending(ParserState *s, NotePool *pool, char digit) {
+    if (digit == '1') {
+        s->ending_start_index = (int16_t)pool->count;
+        return 0;
+    }
+    if (s->in_repeat && s->ending_start_index >= 0 && s->repeat_start_index >= 0) {
+        if (copy_repeat_section(pool, s->repeat_start_index,
+                                (int16_t)(s->ending_start_index - 1)) < 0) return -1;
+    }
+    s->ending_start_index = -1;
+    s->in_repeat = 0;
+    s->repeat_start_index = -1;
+    return 0;
+}
+
 // ============================================================================
 // Header parsing
 // ============================================================================
@@ -434,81 +553,13 @@ static void parse_header(ParserState *s, struct sheet *sheet) {
         uint8_t vlen = (uint8_t)(line_end - start);
         const char *val = s->input + start;
 
-        switch (field) {
-            case 'X': break; // Reference number, ignore
-            case 'T': safe_strcpy(sheet->title, ABC_MAX_TITLE_LEN, val, vlen); break;
-            case 'C': safe_strcpy(sheet->composer, ABC_MAX_COMPOSER_LEN, val, vlen); break;
-            case 'L': {
-                int num = 0, den = 0;
-                uint8_t i = 0;
-                while (i < vlen && val[i] >= '0' && val[i] <= '9') num = num * 10 + (val[i++] - '0');
-                if (i < vlen && val[i] == '/') {
-                    i++;
-                    while (i < vlen && val[i] >= '0' && val[i] <= '9') den = den * 10 + (val[i++] - '0');
-                }
-                if (num > 0 && den > 0) {
-                    s->default_num = sheet->default_note_num = (uint8_t)num;
-                    s->default_den = sheet->default_note_den = (uint8_t)den;
-                    s->has_explicit_L = 1;
-                }
-                break;
-            }
-            case 'M': {
-                int num = 0, den = 0;
-                uint8_t i = 0;
-                while (i < vlen && val[i] >= '0' && val[i] <= '9') num = num * 10 + (val[i++] - '0');
-                if (i < vlen && val[i] == '/') {
-                    i++;
-                    while (i < vlen && val[i] >= '0' && val[i] <= '9') den = den * 10 + (val[i++] - '0');
-                }
-                if (num > 0 && den > 0) {
-                    s->meter_num = sheet->meter_num = (uint8_t)num;
-                    s->meter_den = sheet->meter_den = (uint8_t)den;
-                }
-                break;
-            }
-            case 'Q': {
-                int tempo = 0, note_num = 0, note_den = 0;
-                uint8_t i = 0;
-                uint8_t eq_pos = 0;
-                for (uint8_t j = 0; j < vlen; j++) {
-                    if (val[j] == '=') { eq_pos = j + 1; break; }
-                }
-                if (eq_pos > 0) {
-                    while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
-                        note_num = note_num * 10 + (val[i++] - '0');
-                    }
-                    if (i < eq_pos - 1 && val[i] == '/') {
-                        i++;
-                        while (i < eq_pos - 1 && val[i] >= '0' && val[i] <= '9') {
-                            note_den = note_den * 10 + (val[i++] - '0');
-                        }
-                    }
-                    if (note_num > 0 && note_den > 0) {
-                        s->tempo_note_num = sheet->tempo_note_num = (uint8_t)note_num;
-                        s->tempo_note_den = sheet->tempo_note_den = (uint8_t)note_den;
-                        s->has_explicit_Q_note = 1;
-                    }
-                }
-                i = eq_pos;
-                while (i < vlen && val[i] >= '0' && val[i] <= '9') {
-                    tempo = tempo * 10 + (val[i++] - '0');
-                }
-                if (tempo > 0) s->tempo_bpm = sheet->tempo_bpm = (uint16_t)tempo;
-                break;
-            }
-            case 'K': {
-                safe_strcpy(sheet->key, ABC_MAX_KEY_LEN, val, vlen);
-                set_key_signature(s, sheet->key);
-                s->has_explicit_K = 1;
-                s->pos = end;
-                return;
-            }
-            case 'V':
-                // V: marks start of body - don't consume it, let body parser handle it
-                return;
+        if (field == 'V') {
+            // V: marks start of body - don't consume it, let body parser handle it
+            return;
         }
+        apply_field_value(s, sheet, field, val, vlen);
         s->pos = end;
+        if (field == 'K') return;  // K: ends the header
     }
 }
 
@@ -590,6 +641,68 @@ static int parse_pitch(ParserState *s, ParsedPitch *pitch) {
 }
 
 // ============================================================================
+// Ornament / rhythm modifiers
+// ============================================================================
+
+// Apply a pending broken-rhythm modifier (s->broken_rhythm) to the previous
+// (tail) note and return the adjusted duration for the current note.
+//   '>' : previous note dotted (x3/2), current note cut (x1/2)
+//   '<' : previous note cut,           current note dotted
+// n consecutive signs scale the dotted side by (2^(n+1)-1)/2^n, the cut side
+// by 1/2^n (so '>>' is x7/4 and x1/4). Fixes up pool->total_ticks.
+static uint8_t apply_broken_rhythm(ParserState *s, NotePool *pool, uint8_t cur_dur) {
+    int8_t b = s->broken_rhythm;
+    s->broken_rhythm = 0;
+    if (b == 0) return cur_dur;
+
+    uint8_t n = (b > 0) ? (uint8_t)b : (uint8_t)(-b);
+    if (n > 4) n = 4;
+    uint16_t den = (uint16_t)(1u << n);
+    uint16_t dot = (uint16_t)((1u << (n + 1)) - 1);
+    uint16_t prev_num = (b > 0) ? dot : 1;
+    uint16_t cur_num  = (b > 0) ? 1   : dot;
+
+    if (pool && pool->notes && pool->tail_index >= 0) {
+        struct note *prev = &pool->notes[pool->tail_index];
+        uint32_t nd = (uint32_t)prev->duration * prev_num / den;
+        if (nd > 255) nd = 255;
+        if (nd < 1) nd = 1;
+        pool->total_ticks += (uint8_t)nd - prev->duration;
+        prev->duration = (uint8_t)nd;
+    }
+    uint32_t cd = (uint32_t)cur_dur * cur_num / den;
+    if (cd > 255) cd = 255;
+    if (cd < 1) cd = 1;
+    return (uint8_t)cd;
+}
+
+// Emit any grace notes buffered from a {..} group ahead of a principal note of
+// length principal_dur. Each grace note steals ABC_GRACE_NOTE_TICKS from the
+// principal (so the bar length is unchanged); returns the total ticks stolen.
+static uint8_t emit_grace_notes(ParserState *s, NotePool *pool, uint8_t principal_dur) {
+    uint8_t cnt = s->grace_count;
+    s->grace_count = 0;
+    if (cnt == 0 || !pool) return 0;
+
+    uint16_t per = ABC_GRACE_NOTE_TICKS;
+    if (per < 1) per = 1;
+    uint16_t total = (uint16_t)(per * cnt);
+    if (total >= principal_dur) {            // keep >= 1 tick for the principal
+        if (principal_dur <= cnt) return 0;  // too short to ornament; drop grace
+        per = (uint16_t)((principal_dur - 1) / cnt);
+        if (per == 0) return 0;
+        total = (uint16_t)(per * cnt);
+    }
+    for (uint8_t i = 0; i < cnt; i++) {
+        NoteName nm[1] = { s->grace_names[i] };
+        int oc[1] = { s->grace_octaves[i] };
+        int8_t ac[1] = { s->grace_accs[i] };
+        if (pool_append_note(pool, 1, nm, oc, ac, (uint8_t)per) < 0) break;
+    }
+    return (uint8_t)total;
+}
+
+// ============================================================================
 // Note/Chord parsing
 // ============================================================================
 
@@ -656,6 +769,9 @@ static int parse_note_or_chord(ParserState *s, struct sheet *sheet) {
 
         if (chord_size > 0) {
             uint8_t duration = calculate_duration_ticks(s, total_dur_num, total_dur_den);
+            s->tie_pending = 0;  // chord ties not modelled
+            duration = apply_broken_rhythm(s, pool, duration);
+            duration -= emit_grace_notes(s, pool, duration);
             return pool_append_note(pool, chord_size, names, octaves, accs, duration);
         }
         return 0;
@@ -668,6 +784,25 @@ static int parse_note_or_chord(ParserState *s, struct sheet *sheet) {
         int octaves[1] = { pitch.octave };
         int8_t accs[1] = { pitch.accidental };
         uint8_t duration = calculate_duration_ticks(s, pitch.dur_num, pitch.dur_den);
+
+        // Tie: fold this note into the previous one if it is the same pitch.
+        if (s->tie_pending) {
+            s->tie_pending = 0;
+            if (pitch.name != NOTE_REST && pool->notes && pool->tail_index >= 0) {
+                struct note *prev = &pool->notes[pool->tail_index];
+                int midi = note_to_midi(pitch.name, pitch.octave, pitch.accidental);
+                if (prev->chord_size == 1 && prev->midi_note[0] == (uint8_t)midi) {
+                    uint32_t nd = (uint32_t)prev->duration + duration;
+                    if (nd > 255) nd = 255;
+                    pool->total_ticks += (uint8_t)nd - prev->duration;
+                    prev->duration = (uint8_t)nd;
+                    return 0;  // merged into previous note
+                }
+            }
+        }
+
+        duration = apply_broken_rhythm(s, pool, duration);
+        duration -= emit_grace_notes(s, pool, duration);
         return pool_append_note(pool, 1, names, octaves, accs, duration);
     }
 
@@ -713,8 +848,12 @@ static int copy_repeat_section(NotePool *pool, int16_t start_idx, int16_t end_id
 static int parse_notes(ParserState *s, struct sheet *sheet) {
     s->repeat_start_index = -1;
     s->repeat_end_index = -1;
+    s->ending_start_index = -1;
     s->in_repeat = 0;
     s->current_voice = 0;
+    s->broken_rhythm = 0;
+    s->tie_pending = 0;
+    s->grace_count = 0;
 
     // Don't create default voice yet - wait to see if V: line comes first
 
@@ -769,11 +908,15 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             advance(s);
             memset(s->bar_accidentals, 0, 7);
             c = peek(s);
-            if (c == ':') {
+            if (c == ':') {                       // |:  start repeat
                 advance(s);
                 s->in_repeat = 1;
                 s->repeat_start_index = (int16_t)pool->count;
-            } else if (c == '|' || c == ']') {
+                s->ending_start_index = -1;
+            } else if (c >= '1' && c <= '9') {    // |1 / |2  numbered ending
+                advance(s);
+                if (handle_ending(s, pool, c) < 0) return -2;
+            } else if (c == '|' || c == ']') {    // || or |]
                 advance(s);
             }
             continue;
@@ -781,17 +924,28 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
 
         if (c == ':') {
             advance(s);
-            if (peek(s) == '|') {
+            if (peek(s) == '|') {                 // :|  end repeat
                 advance(s);
-                s->repeat_end_index = (int16_t)(pool->count - 1);
-                if (peek(s) == ':') {
+                // Copy only the common part if a 1st ending was open.
+                int16_t copy_end = (s->ending_start_index >= 0)
+                    ? (int16_t)(s->ending_start_index - 1)
+                    : (int16_t)(pool->count - 1);
+                s->repeat_end_index = copy_end;
+                if (copy_repeat_section(pool, s->repeat_start_index, copy_end) < 0) return -2;
+                if (peek(s) == ':') {             // :|:  start another repeat
                     advance(s);
-                    if (copy_repeat_section(pool, s->repeat_start_index, s->repeat_end_index) < 0) return -2;
                     s->repeat_start_index = (int16_t)pool->count;
-                } else {
-                    if (copy_repeat_section(pool, s->repeat_start_index, s->repeat_end_index) < 0) return -2;
+                    s->ending_start_index = -1;
+                } else {                          // :|2 / :|[2  -> consume ending marker
+                    if (peek(s) == '[') {
+                        char d = (s->pos + 1 < s->len) ? s->input[s->pos + 1] : 0;
+                        if (d >= '1' && d <= '9') { advance(s); advance(s); }
+                    } else if (peek(s) >= '1' && peek(s) <= '9') {
+                        advance(s);
+                    }
                     s->in_repeat = 0;
                     s->repeat_start_index = -1;
+                    s->ending_start_index = -1;
                 }
             }
             continue;
@@ -815,9 +969,54 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             continue;
         }
 
-        // Skip decorations (staccato dots, ties, slurs, etc.)
-        if (c == ')' || c == '{' || c == '}' || c == '!' || c == '+' ||
-            c == '-' || c == '<' || c == '>' || c == '~' || c == '%' || c == '.') {
+        // Broken rhythm: '>' dots the previous note and cuts the next, '<' vice
+        // versa. Applied when the next note is appended (see apply_broken_rhythm).
+        if (c == '>' || c == '<') {
+            char bc = c;
+            int8_t cnt = 0;
+            while (peek(s) == bc) { advance(s); if (cnt < 8) cnt++; }
+            s->broken_rhythm = (bc == '>') ? cnt : (int8_t)(-cnt);
+            continue;
+        }
+
+        // Tie: fold the next same-pitch note into the previous one.
+        if (c == '-') {
+            advance(s);
+            s->tie_pending = 1;
+            continue;
+        }
+
+        // Grace notes {..}: buffer their pitches; they steal a little time from
+        // the following principal note (see emit_grace_notes).
+        if (c == '{') {
+            advance(s);                       // '{'
+            if (peek(s) == '/') advance(s);   // acciaccatura slash
+            s->grace_count = 0;
+            while (s->pos < s->len && peek(s) != '}') {
+                char gc = peek(s);
+                if ((gc >= 'A' && gc <= 'G') || (gc >= 'a' && gc <= 'g') ||
+                    gc == 'z' || gc == 'Z' || gc == '^' || gc == '_' || gc == '=') {
+                    ParsedPitch gp;
+                    if (parse_pitch(s, &gp) == 0) {
+                        if (gp.name != NOTE_REST && s->grace_count < ABC_GRACE_MAX) {
+                            s->grace_names[s->grace_count] = gp.name;
+                            s->grace_octaves[s->grace_count] = gp.octave;
+                            s->grace_accs[s->grace_count] = gp.accidental;
+                            s->grace_count++;
+                        }
+                    } else {
+                        advance(s);
+                    }
+                } else {
+                    advance(s);
+                }
+            }
+            if (peek(s) == '}') advance(s);
+            continue;
+        }
+
+        // Skip remaining decorations (staccato dot, slurs, ornaments, etc.)
+        if (c == ')' || c == '!' || c == '+' || c == '~' || c == '%' || c == '.') {
             advance(s);
             continue;
         }
@@ -827,6 +1026,40 @@ static int parse_notes(ParserState *s, struct sheet *sheet) {
             while (s->pos < s->len && peek(s) != '"') advance(s);
             if (peek(s) == '"') advance(s);
             continue;
+        }
+
+        // '[' may begin a numbered ending ([1, [2), an inline field ([K:G]),
+        // or a chord. Endings and fields are handled here; chords fall through
+        // to parse_note_or_chord below.
+        if (c == '[') {
+            char n1 = (s->pos + 1 < s->len) ? s->input[s->pos + 1] : 0;
+            char n2 = (s->pos + 2 < s->len) ? s->input[s->pos + 2] : 0;
+            if (n1 >= '1' && n1 <= '9') {                 // [1 / [2  numbered ending
+                advance(s);                                // '['
+                advance(s);                                // digit
+                if (handle_ending(s, pool, n1) < 0) return -2;
+                continue;
+            }
+            if (((n1 >= 'A' && n1 <= 'Z') || (n1 >= 'a' && n1 <= 'z')) && n2 == ':') {
+                advance(s);                                // '['
+                char field = advance(s);                   // field letter
+                advance(s);                                // ':'
+                uint16_t vstart = s->pos;
+                while (s->pos < s->len && peek(s) != ']' &&
+                       peek(s) != '\n' && peek(s) != '\r') advance(s);
+                uint16_t vend = s->pos;
+                if (peek(s) == ']') advance(s);
+                while (vend > vstart && (s->input[vend-1] == ' ' || s->input[vend-1] == '\t')) vend--;
+                uint8_t vlen = (uint8_t)(vend - vstart);
+                if (field == 'V') {
+                    int vi = find_or_create_voice(sheet, s->input + vstart, vlen);
+                    if (vi >= 0) s->current_voice = (uint8_t)vi;
+                } else {
+                    apply_field_value(s, sheet, field, s->input + vstart, vlen);
+                }
+                continue;
+            }
+            // else: a chord — handled by parse_note_or_chord below.
         }
 
         int result = parse_note_or_chord(s, sheet);
